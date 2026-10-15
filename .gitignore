@@ -1,0 +1,19 @@
+# Raw/non-anonymized chat data must never be committed
+data/raw/*
+!data/raw/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+
+# Logs and traces
+logs/*
+!logs/.gitkeep
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
