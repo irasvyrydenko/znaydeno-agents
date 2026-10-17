@@ -32,7 +32,15 @@ def ollama_client() -> ollama.Client:
 
 
 def chat(client: ollama.Client, model: str, messages: list, **kwargs):
-    kwargs = dict(model=model, messages=messages, options={"temperature": 0}, **kwargs)
+    options = {
+        "temperature": 0,
+        # Ollama's default 4096 is silently exceeded by the prompt plus a few search results,
+        # and then the start of the conversation (the instructions) is cut off
+        "num_ctx": int(os.getenv("LOSTFOUND_NUM_CTX", "8192")),
+        # A runaway generation otherwise never ends
+        "num_predict": 1024,
+    }
+    kwargs = dict(model=model, messages=messages, options=options, **kwargs)
     try:
         # qwen3 "thinking" makes small-model tool calls slower and less stable
         return client.chat(think=False, **kwargs)
@@ -122,6 +130,8 @@ async def run_tool_loop(
         if missing:
             raise RuntimeError(f"MCP server does not expose: {sorted(missing)}")
         ollama_tools = [to_ollama_tool(t) for t in tools]
+        seen_calls: set[str] = set()
+        repeats = 0
 
         for _ in range(max_steps):
             response = chat(client, model, messages, tools=ollama_tools)
@@ -142,7 +152,17 @@ async def run_tool_loop(
                         arguments = fixed
                 log.info("[%s] -> %s(%s)", agent, name, json.dumps(arguments, ensure_ascii=False))
 
-                if name not in allowed_tools:
+                call_key = f"{name}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
+                if call_key in seen_calls:
+                    # Small models loop on the same query; answer from history instead of calling again
+                    repeats += 1
+                    result = {
+                        "status": "error",
+                        "error_code": "REPEATED_CALL",
+                        "message": "Цей виклик уже виконано, результат є вище. "
+                        "Зміни запит або дай фінальну відповідь.",
+                    }
+                elif name not in allowed_tools:
                     result: Any = {
                         "status": "error",
                         "error_code": "TOOL_NOT_ALLOWED",
@@ -159,6 +179,7 @@ async def run_tool_loop(
                     except Exception as e:  # bad arguments, server crash
                         result = {"status": "error", "error_code": "TOOL_FAILED", "message": str(e)}
 
+                seen_calls.add(call_key)
                 log.info("[%s] <- %s", agent, _summarize(result))
                 run.tool_calls.append(ToolCallRecord(name, arguments, result))
                 messages.append({
@@ -166,6 +187,10 @@ async def run_tool_loop(
                     "tool_name": name,
                     "content": json.dumps(result, ensure_ascii=False, default=str),
                 })
+
+            if repeats >= 2:
+                log.info("[%s] stopped: the model keeps repeating the same call", agent)
+                return run
 
     run.steps_exhausted = True
     log.info("[%s] stopped after %d steps without a final answer", agent, max_steps)
