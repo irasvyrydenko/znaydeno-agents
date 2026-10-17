@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import sys
+from datetime import date
 
 from lostfound.agents.base import ask_json, log, run_tool_loop
 from lostfound.server import DATA_DIR
@@ -37,7 +38,8 @@ Dates are YYYY-MM-DD and filter by the post's event_date, inclusive.
 
 How to work:
 1. From the lost post, extract the item type, key attributes (colour, brand, material, marks) and the place.
-2. Search found posts. When the lost event_date is known, set date_from to it: an item cannot be found before it was lost.
+2. Search found posts. Set date_from only when the lost post gives its event_date, and set it to exactly that date:
+   an item cannot be found before it was lost. Never guess or invent dates; without an event_date, do not filter by date.
    Do not set date_to: items are often found days later. Leave limit at its default.
 3. If results do not fit, search again with a different query. Never repeat a query you already made.
    Stop searching as soon as you have a fitting candidate, or after 4 searches.
@@ -73,11 +75,13 @@ def _lost_posts() -> dict[str, dict[str, str]]:
         return {row["id"]: row for row in csv.DictReader(file)}
 
 
-def build_request(request: str) -> tuple[str, str | None]:
-    """Attach the lost post when the request names it by id ("Допоможи знайти L03").
+def build_request(request: str) -> tuple[str, dict[str, str] | None]:
+    """Attach today's date and, when the request names a lost post by id
+    ("Допоможи знайти L03"), that post itself.
 
     The Matcher has only text search, so it cannot look a post up by id itself.
     """
+    request = f"Today is {date.today().isoformat()}.\n\n{request}"
     match = LOST_ID.search(request)
     if not match:
         return request, None
@@ -95,7 +99,21 @@ def build_request(request: str) -> tuple[str, str | None]:
         f"text: {post['text']}\n"
         f"</post>"
     )
-    return block, post["id"]
+    return block, post
+
+
+def date_guard(lost_post: dict[str, str] | None):
+    """Drop dates the model made up: date_to always (items are found later),
+    date_from unless it is the known event_date of the lost post."""
+    event_date = (lost_post or {}).get("event_date") or None
+
+    def sanitize(tool_name: str, arguments: dict) -> dict:
+        fixed = {k: v for k, v in arguments.items() if k not in ("date_from", "date_to")}
+        if event_date and arguments.get("date_from"):
+            fixed["date_from"] = event_date
+        return fixed
+
+    return sanitize
 
 
 def _rejected_note(rejected: list[dict]) -> str:
@@ -113,11 +131,14 @@ async def run_matcher(request: str, rejected: list[dict] | None = None, model: s
 
     rejected: candidates the Verifier refused earlier, with their error and hint.
     """
-    user, known_lost_id = build_request(request)
+    user, lost_post = build_request(request)
+    known_lost_id = lost_post["id"] if lost_post else None
     if rejected:
         user += _rejected_note(rejected)
 
-    run = await run_tool_loop(AGENT, SYSTEM_PROMPT, user, MATCHER_TOOLS, model=model)
+    run = await run_tool_loop(
+        AGENT, SYSTEM_PROMPT, user, MATCHER_TOOLS, model=model, sanitize_arguments=date_guard(lost_post)
+    )
     answer = ask_json(run.messages, FINAL_INSTRUCTION, HANDOFF_SCHEMA, model=model)
 
     reason = str(answer.get("reason", "")).strip()

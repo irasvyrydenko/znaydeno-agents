@@ -9,7 +9,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import ollama
 from dotenv import load_dotenv
@@ -104,8 +104,13 @@ async def run_tool_loop(
     allowed_tools: set[str],
     model: str | None = None,
     max_steps: int = 6,
+    sanitize_arguments: Callable[[str, dict], dict] | None = None,
 ) -> AgentRun:
-    """Let the model call its allowed tools until it answers in text or max_steps runs out."""
+    """Let the model call its allowed tools until it answers in text or max_steps runs out.
+
+    sanitize_arguments(tool_name, arguments) may fix arguments the model made up
+    before the tool is called; the change is logged.
+    """
     model = model or model_name()
     client = ollama_client()
     messages: list = [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -129,6 +134,12 @@ async def run_tool_loop(
             for call in calls:
                 name = call.function.name
                 arguments = dict(call.function.arguments or {})
+                if sanitize_arguments:
+                    fixed = sanitize_arguments(name, arguments)
+                    if fixed != arguments:
+                        log.info("[%s] model asked %s(%s), corrected", agent, name,
+                                 json.dumps(arguments, ensure_ascii=False))
+                        arguments = fixed
                 log.info("[%s] -> %s(%s)", agent, name, json.dumps(arguments, ensure_ascii=False))
 
                 if name not in allowed_tools:
