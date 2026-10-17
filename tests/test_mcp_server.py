@@ -12,7 +12,7 @@ from mcp.client.stdio import stdio_client
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVER = ROOT / "src" / "lostfound" / "server_v2.py"
+SERVER = ROOT / "src" / "lostfound" / "server.py"
 MATCHES = ROOT / "data" / "processed" / "matches.csv"
 
 

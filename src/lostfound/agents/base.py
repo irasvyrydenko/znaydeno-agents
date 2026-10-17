@@ -15,7 +15,7 @@ import ollama
 from dotenv import load_dotenv
 from fastmcp import Client
 
-from lostfound.server_v2 import mcp as server
+from lostfound.server import mcp as server
 
 load_dotenv()
 log = logging.getLogger("lostfound.agents")

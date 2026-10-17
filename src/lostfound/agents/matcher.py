@@ -22,7 +22,7 @@ import sys
 from datetime import date
 
 from lostfound.agents.base import ask_json, log, run_tool_loop
-from lostfound.server_v2 import DATA_DIR
+from lostfound.server import DATA_DIR
 
 AGENT = "matcher"
 MATCHER_TOOLS = {"search_found", "search_lost"}

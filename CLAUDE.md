@@ -4,7 +4,7 @@ Project "Znaideno!" ("Found!"): an agentic matcher for lost items, based on mess
 
 ## Status
 
-The dataset, split script, MCP server (`src/lostfound/server_v2.py`, with tests) and the Matcher agent (`src/lostfound/agents/matcher.py`) exist. The Verifier, orchestrator, single-agent baseline and evals are not written yet. Do not invent structure that is not there; check what actually exists in the repository before making changes.
+The dataset, split script, MCP server (`src/lostfound/server.py`, with tests) and the Matcher agent (`src/lostfound/agents/matcher.py`) exist. The Verifier, orchestrator, single-agent baseline and evals are not written yet. Do not invent structure that is not there; check what actually exists in the repository before making changes.
 
 ## Layout
 
@@ -25,9 +25,7 @@ logs/            tool-call logs (gitignored)
 
 ## Architecture
 
-An MCP server `lostfound` (FastMCP, Python, `src/lostfound/server_v2.py`) over `lost.csv` and `found.csv`, with three tools:
-
-`src/lostfound/server.py` is the first version, kept unchanged for comparison; agents and tests use `server_v2.py`. Its search falls back to the first rows when nothing matches, and its `WEAK_MATCH` is a Jaccard threshold of 0.05.
+An MCP server `lostfound` (FastMCP, Python, `src/lostfound/server.py`) over `lost.csv` and `found.csv`, with three tools:
 
 | Tool | Access | Purpose |
 |---|---|---|
