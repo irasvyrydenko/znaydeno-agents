@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from fastmcp import FastMCP
 
@@ -83,7 +83,7 @@ def _jaccard_similarity(text1: str, text2: str) -> float:
 
 
 @mcp.tool
-def confirm_match(lost_id: str, found_id: str, reason: str) -> Dict[str, Any]:
+def confirm_match(lost_id: str, found_id: str, reason: str) -> dict[str, Any]:
     """Validate and persist a confirmed lost/found pair based on strict factual rules."""
     
     # 1. Схема: Перевірка наявності обґрунтування

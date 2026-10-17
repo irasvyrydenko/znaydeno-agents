@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lostfound"
+version = "0.1.0"
+description = "Agentic matcher for lost and found items from a college chat (MCP server + Matcher/Verifier agents)"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=2.0",
+    "pandas>=2.0",
+    "ollama>=0.4",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+# Pick one tracing backend
+langfuse = ["langfuse>=2.0"]
+langsmith = ["langsmith>=0.1"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
