@@ -254,3 +254,13 @@ def test_search_ignores_posts_sharing_only_the_place():
     assert [r["id"] for r in lost("читацький 242 Свєнціцького")][:1] == ["L07"]
     # A query that names only a place still lists what was found there
     assert found("К2")
+
+
+def test_misspelled_arguments_are_dropped_not_failed(monkeypatch):
+    script_llm(monkeypatch, [
+        reply(calls=[tool_call("search_found", query="навушники JBL церква", **{"date,To": "2026-10-18"})]),
+        reply("F07."),
+        reply(json.dumps({"lost_id": "L03", "found_id": "F07", "reason": "JBL у церкві"})),
+    ])
+    handoff = asyncio.run(matcher.run_matcher("Допоможи знайти L03"))
+    assert handoff["found_id"] == "F07"

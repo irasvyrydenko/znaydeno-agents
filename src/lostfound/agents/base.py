@@ -75,6 +75,23 @@ def to_ollama_tool(tool) -> dict:
     }
 
 
+def for_model(result: Any) -> str:
+    """What the model reads back from a tool. Search results become one short line per post
+    (id, date, score, status, text): in raw JSON with every column a small model overlooks
+    rows, e.g. the one exact hit at the top. Everything else stays JSON."""
+    if isinstance(result, list) and all(isinstance(r, dict) and "id" in r and "text" in r for r in result):
+        if not result:
+            return "Нічого не знайдено (0 results)."
+        lines = [f"{len(result)} result(s), best first. score = share of query words found in the post:"]
+        for r in result:
+            status = "" if r.get("status", "open") == "open" else f", status={r['status']}"
+            lines.append(
+                f"- {r['id']} (event_date {r.get('event_date') or 'unknown'}, score {r.get('score')}{status}): {r['text']}"
+            )
+        return "\n".join(lines)
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
 def _summarize(result: Any) -> str:
     if isinstance(result, list):
         found = [row.get("id", "?") for row in result if isinstance(row, dict)]
@@ -133,6 +150,7 @@ async def run_tool_loop(
         if missing:
             raise RuntimeError(f"MCP server does not expose: {sorted(missing)}")
         ollama_tools = [to_ollama_tool(t) for t in tools]
+        parameters = {t.name: set(t.input_schema.get("properties", {})) for t in tools}
         seen_calls: set[str] = set()
         repeats = 0
 
@@ -147,6 +165,11 @@ async def run_tool_loop(
             for call in calls:
                 name = call.function.name
                 arguments = dict(call.function.arguments or {})
+                unknown = set(arguments) - parameters.get(name, set(arguments))
+                if unknown:
+                    # Small models misspell parameters ("date,To"); drop them instead of failing the call
+                    log.info("[%s] dropped unknown arguments of %s: %s", agent, name, sorted(unknown))
+                    arguments = {k: v for k, v in arguments.items() if k not in unknown}
                 if sanitize_arguments:
                     fixed = sanitize_arguments(name, arguments)
                     if fixed != arguments:
@@ -191,7 +214,7 @@ async def run_tool_loop(
                 messages.append({
                     "role": "tool",
                     "tool_name": name,
-                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                    "content": for_model(result),
                 })
 
             if repeats >= 2:
