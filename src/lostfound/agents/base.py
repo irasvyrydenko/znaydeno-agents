@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -16,6 +17,7 @@ from dotenv import load_dotenv
 from fastmcp import Client
 
 from lostfound.server_v2 import mcp as server
+from lostfound.tracing import record, traced
 
 load_dotenv()
 log = logging.getLogger("lostfound.agents")
@@ -105,6 +107,7 @@ class AgentRun:
         return ids
 
 
+@traced("agent_loop")
 async def run_tool_loop(
     agent: str,
     system: str,
@@ -152,6 +155,7 @@ async def run_tool_loop(
                         arguments = fixed
                 log.info("[%s] -> %s(%s)", agent, name, json.dumps(arguments, ensure_ascii=False))
 
+                started = time.perf_counter()
                 call_key = f"{name}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
                 if call_key in seen_calls:
                     # Small models loop on the same query; answer from history instead of calling again
@@ -181,6 +185,8 @@ async def run_tool_loop(
 
                 seen_calls.add(call_key)
                 log.info("[%s] <- %s", agent, _summarize(result))
+                record("tool_call", agent=agent, tool=name, arguments=arguments, result=result,
+                       ms=round((time.perf_counter() - started) * 1000))
                 run.tool_calls.append(ToolCallRecord(name, arguments, result))
                 messages.append({
                     "role": "tool",

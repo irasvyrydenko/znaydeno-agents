@@ -4,7 +4,19 @@ Project "Znaideno!" ("Found!"): an agentic matcher for lost items, based on mess
 
 ## Status
 
-The dataset, split script, MCP server (`src/lostfound/server_v2.py`, with tests) and the Matcher agent (`src/lostfound/agents/matcher.py`) exist. The Verifier, orchestrator, single-agent baseline and evals are not written yet. Do not invent structure that is not there; check what actually exists in the repository before making changes.
+The dataset, split script, MCP server (`src/lostfound/server_v2.py`), the agents (`agents/matcher.py`, `agents/verifier.py`, `agents/orchestrator.py`, single-agent baseline `agents/single.py`), tracing (`src/lostfound/tracing.py`) and the eval runner (`evals/run_evals.py`) exist. Not run end to end against Ollama yet; no eval results or conclusions in `docs/` yet.
+
+Run (needs Ollama with `LOSTFOUND_MODEL` pulled):
+
+```
+python -m lostfound.agents.orchestrator "Допоможи знайти L06"   # two agents, lost item
+python -m lostfound.agents.orchestrator "Чиє це? F07"           # two agents, found item
+python -m lostfound.agents.single "Допоможи знайти L06"         # baseline
+python evals/run_evals.py [--mode multi|single|both] [--extra]   # 5 tests, results in evals/results/
+pytest                                                           # no LLM needed
+```
+
+The orchestrator is plain code, not an LLM: Matcher → Verifier, on a retryable refusal the error and `hint` go back to the Matcher, at most 3 attempts. The Verifier's `confirm_match` ids are pinned to the handoff in code, and its verdict is read from the tool result, not from the model's text. The Matcher works in both directions: a lost item (`L..` or "загубила…") searches found posts with `search_found`; a found item (`F..`, "знайшла…", "чиє це?") searches lost posts with `search_lost`. The direction comes from the post id, otherwise from a keyword heuristic in `matcher.detect_direction`. Date guards mirror each other: lost → only `date_from = event_date`, found → only `date_to = event_date`. Do not invent structure that is not there; check what actually exists in the repository before making changes.
 
 ## Layout
 
@@ -48,7 +60,7 @@ Rationale: a false match sends a person to collect someone else's item, so writi
 
 ## Handoff contract (Matcher → Verifier)
 
-The Matcher passes only its single best candidate:
+The Matcher passes only its single best candidate, in either direction (the orchestrator also gets a `direction` field and strips it before the Verifier):
 
 ```python
 match = {"lost_id": ..., "found_id": ..., "reason": ...}
@@ -59,8 +71,9 @@ The Verifier receives exactly this and nothing else: no post texts, no dates. Th
 - All data-based checks (`unknown_id`, `already_matched`, `found_before_lost`, `weak_match`) are done inside `confirm_match` from the CSV files, deterministically. The Verifier does not judge them itself.
 - On a refusal, the error `hint` goes back to the Matcher, which takes the next candidate. Cap the loop at 3 attempts.
 - The Verifier writes its own `reason` to `matches.csv`; the Matcher's `reason` is only input.
-- A request may name a lost post by id ("Допоможи знайти L03"). The Matcher code attaches that post's text from `lost.csv` to the prompt, since the tools search by text only.
-- The Matcher's `found_id` must be one returned by its searches in the same run; otherwise it is dropped. `found_id: null` means no candidate, and the Verifier is not called.
+- A request may name a post by id ("Допоможи знайти L03", "Чиє це? F07"). The Matcher code attaches that post's text from `lost.csv` or `found.csv` to the prompt, since the tools search by text only.
+- The candidate id (the `found_id` for a lost item, the `lost_id` for a found item) must be one returned by the Matcher's searches in the same run; otherwise it is dropped. A null candidate means no match, and the Verifier is not called. A free-text request has no own post, so nothing is recorded (`candidate_only`).
+- Refusal hints list alternatives from both sides: other found posts for the lost one, and other open lost posts for the found one.
 - If the Verifier turns out to add little, note in the conclusions that it saw only IDs and `reason`. Enriching the handoff with texts and dates (done by the orchestrator from the CSV, not by the Matcher) is the planned next step.
 
 ## Tool error contract
@@ -104,7 +117,7 @@ Photo parsing, live Telegram, UI, notifications to owners.
 
 ## Tracing
 
-Langfuse or LangSmith, plus a console log of tool calls (needed for the demo video).
+Console log of tool calls (for the demo video), a local JSONL trace per process in `logs/trace-*.jsonl`, and Langfuse or LangSmith spans when their keys are set in `.env` (see `tracing.py`).
 
 ## Working with code
 
