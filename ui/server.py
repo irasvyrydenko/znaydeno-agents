@@ -99,10 +99,10 @@ async def _run_matcher(request, rejected=None, model=None):
     return handoff
 
 
-async def _run_verifier(handoff, model=None):
+async def _run_verifier(handoff, posts=None, model=None):
     _current_agent["name"] = "verifier"
-    emit("agent_start", agent="verifier", handoff=handoff)
-    verdict = await _original_verifier(handoff, model=model)
+    emit("agent_start", agent="verifier", handoff=handoff, posts=posts)
+    verdict = await _original_verifier(handoff, posts=posts, model=model)
     emit("verdict", verdict=verdict)
     _current_agent["name"] = None
     return verdict

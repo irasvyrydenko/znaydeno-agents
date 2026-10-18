@@ -525,7 +525,7 @@ function handle(ev) {
           if (ev.rejected && ev.rejected.length) {
             const last = ev.rejected[ev.rejected.length - 1];
             sticky("Verifier → Matcher: відмова + hint", last);
-            await packet("p-verifier-matcher", { label: `hint: ${last.error_code}`, color: "var(--warn)" });
+            await packet("p-verifier-matcher", { label: `hint: ${last.problem || last.error_code}`, color: "var(--warn)" });
           }
           setActive("n-verifier", false);
           setActive("n-matcher", true);
@@ -534,7 +534,16 @@ function handle(ev) {
         } else {
           setActive("n-matcher", false);
           setActive("n-verifier", true);
-          setState("verifier", "перевіряє пару…");
+          setState("verifier", "читає обидва оголошення");
+          if (ev.posts) {
+            ["lost", "found"].forEach((k) => ev.posts[k] && flash(k === "lost" ? "d-lost" : "d-found", "read", 900));
+            sticky("Оркестратор → Verifier: пара + обидва оголошення", {
+              lost: ev.posts.lost && `${ev.posts.lost.id}: ${ev.posts.lost.text}`,
+              found: ev.posts.found && `${ev.posts.found.id}: ${ev.posts.found.text}`,
+              reason_від_Matcher: ev.handoff.reason,
+            });
+            await sleep(900);
+          }
           describeTyping("Verifier перевіряє збіг…");
         }
       });
@@ -544,7 +553,8 @@ function handle(ev) {
       if (!ev.agent) break;
       enqueue(async () => {
         setThinking(ev.agent, true);
-        setState(ev.agent, ev.final ? "формує відповідь…" : "думає (LLM)…");
+        const label = ev.agent === "verifier" && ev.final ? "порівнює оголошення…" : ev.final ? "формує відповідь…" : "думає (LLM)…";
+        setState(ev.agent, label);
       });
       break;
 
@@ -623,9 +633,20 @@ function handle(ev) {
     case "verdict":
       enqueue(async () => {
         const v = ev.verdict;
-        const text = v.status === "confirmed" ? "✓ підтверджено" : `✗ ${v.error_code || v.status}`;
+        const text = v.status === "confirmed" ? "✓ підтверджено" : `✗ ${v.problem || v.error_code || v.status}`;
         setState("verifier", text);
-        sticky(`Verifier: вердикт — ${v.status}`, v);
+        const c = v.check || {};
+        sticky(`Verifier: вердикт — ${v.status}${v.problem ? " (" + v.problem + ")" : ""}`, {
+          message: v.message,
+          ...(v.check ? {
+            перевірка: {
+              та_сама_річ: c.same_item, [`у ${v.lost_id}`]: c.lost_item, [`у ${v.found_id}`]: c.found_item,
+              місця: `${c.lost_place || "—"}  vs  ${c.found_place || "—"}`, конфлікт_місць: c.place_conflict,
+              суперечності: c.contradictions, спільні_деталі: c.shared_specific,
+            },
+          } : {}),
+          ...(v.hint ? { hint: v.hint } : {}),
+        });
         await sleep(400);
       });
       break;
