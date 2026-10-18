@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Знайдено! — під капотом</title>
+<style>
+:root {
+  --bg: #0d0f14;
+  --panel: #151922;
+  --panel-2: #1b2030;
+  --line: #2a3142;
+  --text: #e8ebf2;
+  --muted: #8b93a7;
+  --client: #bfe3ff;
+  --client-edge: #3b9cff;
+  --agent: #ffa13d;
+  --agent-edge: #e07b00;
+  --agent-layer: rgba(255, 161, 61, 0.07);
+  --tool: #66d67a;
+  --tool-edge: #2f9e48;
+  --tool-layer: rgba(102, 214, 122, 0.07);
+  --data: #8c5aff;
+  --data-edge: #6a3df0;
+  --data-layer: rgba(140, 90, 255, 0.09);
+  --sticky: #ffaadf;
+  --ok: #4ade80;
+  --err: #ff6b6b;
+  --warn: #fbbf24;
+  --packet: #ffffff;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  display: flex; flex-direction: column;
+}
+header {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 20px; border-bottom: 1px solid var(--line);
+}
+header h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+header .sub { color: var(--muted); font-size: 13px; }
+header .spacer { flex: 1; }
+button {
+  font: inherit; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer;
+}
+button:hover { border-color: #3d475e; }
+button:disabled { opacity: .5; cursor: default; }
+select { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
+label.speed { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+
+main { flex: 1; display: grid; grid-template-columns: minmax(320px, 36%) 1fr; min-height: 0; }
+
+/* ---------- chat ---------- */
+.chat { display: flex; flex-direction: column; border-right: 1px solid var(--line); min-height: 0; background: var(--panel); }
+.messages { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 88%; padding: 10px 13px; border-radius: 14px; white-space: pre-wrap; word-wrap: break-word; }
+.msg.user { align-self: flex-end; background: #2b5cff; color: white; border-bottom-right-radius: 4px; }
+.msg.bot { align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.msg.bot .status { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase; padding: 2px 7px; border-radius: 99px; margin-bottom: 6px; }
+.status.confirmed { background: rgba(74, 222, 128, .15); color: var(--ok); }
+.status.needs_details, .status.candidate_only, .status.unresolved { background: rgba(251, 191, 36, .14); color: var(--warn); }
+.status.no_match, .status.already_matched { background: rgba(139, 147, 167, .18); color: #c3c9d6; }
+.status.error { background: rgba(255, 107, 107, .15); color: var(--err); }
+.msg.typing { color: var(--muted); font-style: italic; }
+.msg.typing::after { content: "▍"; animation: blink 1s steps(2) infinite; margin-left: 2px; }
+@keyframes blink { 50% { opacity: 0; } }
+.idchip { display: inline-block; font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 0 6px; border-radius: 6px; cursor: help; }
+.idchip.L { background: rgba(255, 161, 61, .18); color: #ffc078; }
+.idchip.F { background: rgba(102, 214, 122, .16); color: #8be89b; }
+.intro { color: var(--muted); font-size: 13px; }
+.intro b { color: var(--text); }
+.suggestions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 18px 10px; }
+.suggestions button { font-size: 12.5px; padding: 5px 10px; border-radius: 99px; color: #cfd5e2; }
+form.input { display: flex; gap: 8px; padding: 12px 18px 18px; border-top: 1px solid var(--line); }
+form.input input {
+  flex: 1; font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; outline: none;
+}
+form.input input:focus { border-color: var(--client-edge); }
+form.input button { background: #2b5cff; border-color: #2b5cff; color: white; padding: 0 16px; border-radius: 10px; }
+
+/* ---------- brain ---------- */
+.brain { display: grid; grid-template-rows: 1fr auto; min-height: 0; min-width: 0; }
+.diagram { min-height: 0; display: flex; align-items: center; justify-content: center; padding: 6px 10px 0; }
+.diagram svg { width: 100%; height: 100%; max-height: 100%; }
+.bottom { display: grid; grid-template-columns: minmax(260px, 40%) 1fr; gap: 12px; padding: 10px 14px 14px; height: 230px; }
+.sticky {
+  background: var(--sticky); color: #2a1030; border-radius: 4px; padding: 10px 12px;
+  box-shadow: 4px 6px 0 rgba(0,0,0,.35); overflow: auto; transition: transform .2s;
+}
+.sticky.bump { transform: rotate(-.6deg) scale(1.015); }
+.sticky h3 { margin: 0 0 6px; font-size: 13px; }
+.sticky pre { margin: 0; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.console {
+  background: #07090d; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; overflow-y: auto;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #aab2c5;
+}
+.console div { white-space: pre-wrap; word-break: break-word; }
+.console .matcher { color: #ffc078; }
+.console .verifier { color: #ffd9a8; }
+.console .orchestrator { color: #9cc9ff; }
+.console .err { color: var(--err); }
+
+/* svg pieces */
+.layer { stroke-width: 1.5; rx: 14; }
+.layer-label { font: 600 13px sans-serif; }
+.edge { fill: none; stroke: #4a5266; stroke-width: 2; transition: stroke .25s, stroke-width .25s; }
+.edge.faint { stroke-dasharray: 4 5; stroke: #353c4d; }
+.edge.lit { stroke: #fff; stroke-width: 3; }
+.node { transition: filter .25s; }
+.node.active { filter: url(#glow); }
+.node .body { transition: fill .25s, stroke .25s; }
+.agent .body { fill: var(--agent); stroke: var(--agent-edge); stroke-width: 3; }
+.agent.active .body { fill: #ffb867; stroke: #fff; }
+.agent .ring { fill: none; stroke: #fff; stroke-width: 3; stroke-dasharray: 10 14; opacity: 0; transform-box: fill-box; transform-origin: center; }
+.agent.thinking .ring { opacity: .9; animation: spin 1.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.agent .name { font: 600 19px sans-serif; fill: #1d1206; text-anchor: middle; }
+.agent .state { font: 12px sans-serif; fill: #3b2205; text-anchor: middle; }
+.client .body { fill: var(--client); stroke: var(--client-edge); stroke-width: 3; }
+.client.active .body { stroke: #fff; }
+.client .name { font: 600 17px sans-serif; fill: #0b2a4a; text-anchor: middle; }
+.tool .body { fill: var(--tool); stroke: var(--tool-edge); stroke-width: 2.5; }
+.tool.active .body { fill: #8cf09d; stroke: #fff; }
+.tool.error .body { stroke: var(--err); stroke-width: 4; }
+.tool .name { font: 700 14px ui-monospace, Menlo, monospace; fill: #06260f; }
+.tool .sig { font: 11.5px ui-monospace, Menlo, monospace; fill: #0f3d1b; }
+.tool .last { font: 600 12px ui-monospace, Menlo, monospace; fill: #06260f; }
+.tool .badge { font: 700 10px sans-serif; letter-spacing: .5px; }
+.cyl .body { fill: var(--data); stroke: var(--data-edge); stroke-width: 2.5; }
+.cyl .top { fill: #a37bff; stroke: var(--data-edge); stroke-width: 2.5; }
+.cyl.read .body, .cyl.read .top { stroke: #fff; }
+.cyl.write .body { fill: #3fbf6b; }
+.cyl.write .top { fill: #6ee59a; stroke: #fff; }
+.cyl .name { font: 600 16px sans-serif; fill: #fff; text-anchor: middle; }
+.cyl .count { font: 12px sans-serif; fill: #e6dcff; text-anchor: middle; }
+.attempt { font: 600 12px sans-serif; fill: var(--muted); text-anchor: middle; }
+.packet-label rect { rx: 6; }
+.packet-label text { font: 600 11.5px ui-monospace, Menlo, monospace; }
+
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; grid-template-rows: 55vh auto; }
+  .chat { border-right: none; border-bottom: 1px solid var(--line); }
+  .bottom { grid-template-columns: 1fr; height: auto; }
+  .console, .sticky { max-height: 200px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>🔎 Знайдено!</h1>
+  <span class="sub">Matcher + Verifier через MCP — чат зліва, «мозок» справа</span>
+  <span class="spacer"></span>
+  <label class="speed">Анімація
+    <select id="speed">
+      <option value="1.6">повільно</option>
+      <option value="1" selected>звичайно</option>
+      <option value="0.5">швидко</option>
+    </select>
+  </label>
+  <button id="reset" title="Очистити data/processed/matches.csv">Очистити matches.csv</button>
+</header>
+
+<main>
+  <section class="chat">
+    <div class="messages" id="messages">
+      <div class="intro">
+        Напишіть, що ви <b>загубили</b> або <b>знайшли</b>. Щоб збіг записався в базу, назвіть оголошення з чату:
+        <b>«Допоможи знайти L06»</b> (втрата) чи <b>«Чиє це? F07»</b> (знахідка).
+        Наведіть курсор на <span class="idchip L">L06</span> чи <span class="idchip F">F23</span>, щоб побачити текст оголошення.
+      </div>
+    </div>
+    <div class="suggestions" id="suggestions"></div>
+    <form class="input" id="form">
+      <input id="text" autocomplete="off" placeholder="Я загубила навушники…">
+      <button id="send">Надіслати</button>
+    </form>
+  </section>
+
+  <section class="brain">
+    <div class="diagram">
+      <svg id="svg" viewBox="0 0 1000 760" role="img" aria-label="Схема роботи агентів">
+        <defs>
+          <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="7" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+
+        <!-- layers -->
+        <rect class="layer" x="170" y="48" width="810" height="262" fill="var(--agent-layer)" stroke="var(--agent)"/>
+        <text class="layer-label" x="186" y="70" fill="var(--agent)">Agents Layer</text>
+        <rect class="layer" x="180" y="352" width="790" height="160" fill="var(--tool-layer)" stroke="var(--tool)"/>
+        <text class="layer-label" x="196" y="374" fill="var(--tool)">MCP Server · lostfound</text>
+        <rect class="layer" x="180" y="560" width="790" height="186" fill="var(--data-layer)" stroke="var(--data)"/>
+        <text class="layer-label" x="196" y="582" fill="#b79bff">Data Layer</text>
+
+        <!-- edges -->
+        <path id="p-client-matcher" class="edge" d="M130,170 L288,170"/>
+        <path id="p-matcher-verifier" class="edge" d="M428,150 C540,108 620,108 732,150"/>
+        <path id="p-verifier-matcher" class="edge" d="M732,192 C620,234 540,234 428,192"/>
+        <path id="p-verifier-client" class="edge" d="M800,98 L800,32 Q800,20 788,20 L87,20 Q75,20 75,32 L75,128"/>
+        <path id="p-matcher-search_lost" class="edge" d="M326,234 C318,300 310,330 310,388"/>
+        <path id="p-matcher-search_found" class="edge" d="M398,230 C440,300 570,318 570,388"/>
+        <path id="p-verifier-confirm_match" class="edge" d="M806,240 C810,300 830,330 830,388"/>
+        <path id="p-search_lost-lost" class="edge" d="M310,492 L310,604"/>
+        <path id="p-search_found-found" class="edge" d="M570,492 L570,604"/>
+        <path id="p-confirm_match-matches" class="edge" d="M830,492 L830,604"/>
+        <path id="p-confirm_match-lost" class="edge faint" d="M748,492 C700,552 380,548 340,604"/>
+        <path id="p-confirm_match-found" class="edge faint" d="M772,492 C745,548 620,552 598,604"/>
+
+        <text id="attempt" class="attempt" x="580" y="174"></text>
+
+        <!-- client -->
+        <g id="n-client" class="node client">
+          <rect class="body" x="20" y="130" width="110" height="80" rx="8"/>
+          <text class="name" x="75" y="176">Client</text>
+        </g>
+
+        <!-- agents -->
+        <g id="n-matcher" class="node agent">
+          <circle class="ring" cx="360" cy="170" r="82"/>
+          <circle class="body" cx="360" cy="170" r="72"/>
+          <text class="name" x="360" y="166">Matcher</text>
+          <text class="state" x="360" y="188" id="s-matcher">лише читає</text>
+        </g>
+        <g id="n-verifier" class="node agent">
+          <circle class="ring" cx="800" cy="170" r="82"/>
+          <circle class="body" cx="800" cy="170" r="72"/>
+          <text class="name" x="800" y="166">Verifier</text>
+          <text class="state" x="800" y="188" id="s-verifier">єдиний пише</text>
+        </g>
+
+        <!-- tools -->
+        <g id="t-search_lost" class="node tool">
+          <rect class="body" x="200" y="390" width="220" height="100" rx="8"/>
+          <text class="name" x="214" y="416">search_lost</text>
+          <text class="sig" x="214" y="436">(query, date_from, date_to)</text>
+          <text class="badge" x="386" y="416" fill="#0f3d1b">READ</text>
+          <text class="last" x="214" y="474" id="l-search_lost"></text>
+        </g>
+        <g id="t-search_found" class="node tool">
+          <rect class="body" x="460" y="390" width="220" height="100" rx="8"/>
+          <text class="name" x="474" y="416">search_found</text>
+          <text class="sig" x="474" y="436">(query, date_from, date_to)</text>
+          <text class="badge" x="646" y="416" fill="#0f3d1b">READ</text>
+          <text class="last" x="474" y="474" id="l-search_found"></text>
+        </g>
+        <g id="t-confirm_match" class="node tool">
+          <rect class="body" x="720" y="390" width="220" height="100" rx="8"/>
+          <text class="name" x="734" y="416">confirm_match</text>
+          <text class="sig" x="734" y="436">(lost_id, found_id, reason)</text>
+          <text class="badge" x="900" y="416" fill="#7a1010">WRITE</text>
+          <text class="last" x="734" y="474" id="l-confirm_match"></text>
+        </g>
+
+        <!-- data -->
+        <g id="d-lost" class="node cyl">
+          <rect class="body" x="240" y="612" width="140" height="96"/>
+          <ellipse class="body" cx="310" cy="708" rx="70" ry="14"/>
+          <rect x="242" y="690" width="136" height="18" fill="var(--data)"/>
+          <ellipse class="top" cx="310" cy="612" rx="70" ry="14"/>
+          <text class="name" x="310" y="664">lost.csv</text>
+          <text class="count" x="310" y="684" id="c-lost"></text>
+        </g>
+        <g id="d-found" class="node cyl">
+          <rect class="body" x="500" y="612" width="140" height="96"/>
+          <ellipse class="body" cx="570" cy="708" rx="70" ry="14"/>
+          <rect x="502" y="690" width="136" height="18" fill="var(--data)"/>
+          <ellipse class="top" cx="570" cy="612" rx="70" ry="14"/>
+          <text class="name" x="570" y="664">found.csv</text>
+          <text class="count" x="570" y="684" id="c-found"></text>
+        </g>
+        <g id="d-matches" class="node cyl">
+          <rect class="body" x="760" y="612" width="140" height="96"/>
+          <ellipse class="body" cx="830" cy="708" rx="70" ry="14"/>
+          <rect class="body" x="762" y="690" width="136" height="18" style="stroke:none"/>
+          <ellipse class="top" cx="830" cy="612" rx="70" ry="14"/>
+          <text class="name" x="830" y="664">matches.csv</text>
+          <text class="count" x="830" y="684" id="c-matches"></text>
+        </g>
+
+        <g id="packets"></g>
+      </svg>
+    </div>
+    <div class="bottom">
+      <div class="sticky" id="sticky">
+        <h3 id="sticky-title">Що зараз передається</h3>
+        <pre id="sticky-body">Тут з'являтимуться повідомлення між агентами та інструментами: запити, результати пошуку, handoff і вердикт.</pre>
+      </div>
+      <div class="console" id="console"><div>$ консоль агентів (ті самі рядки, що й у терміналі)</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const SVG_NS = "http://www.w3.org/2000/svg";
+const posts = {};           // id -> post row, for tooltips
+let busy = false;
+
+const SUGGESTIONS = [
+  "Допоможи знайти L06",
+  "Допоможи знайти L03",
+  "Чиє це? F22",
+  "Чиє це? F07",
+  "Допоможи знайти L10",
+  "Допоможи знайти L22",
+  "Я загубила чорні великі навушники JBL у церкві",
+];
+
+const STATUS_LABEL = {
+  confirmed: "збіг записано",
+  no_match: "збігів немає",
+  needs_details: "потрібні деталі",
+  already_matched: "вже зіставлено",
+  unresolved: "не вирішено",
+  candidate_only: "лише кандидат",
+  error: "помилка",
+};
+
+// ---------------- data ----------------
+
+async function loadData() {
+  const data = await (await fetch("/api/data")).json();
+  for (const row of [...data.lost, ...data.found]) posts[row.id] = row;
+  $("c-lost").textContent = `${data.lost.length} оголошень`;
+  $("c-found").textContent = `${data.found.length} оголошень`;
+  setMatchesCount(data.matches.length);
+}
+
+function setMatchesCount(n) {
+  $("c-matches").textContent = n === 1 ? "1 збіг" : `${n} збігів`;
+}
+
+function withIdChips(text) {
+  const safe = text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  return safe.replace(/\b([LF])(\d{2,})\b/g, (m, kind) => {
+    const post = posts[m];
+    const title = post ? `${post.event_date || "дата невідома"} · ${post.text}` : "немає такого оголошення";
+    return `<span class="idchip ${kind}" title="${title.replace(/"/g, "&quot;")}">${m}</span>`;
+  });
+}
+
+// ---------------- chat ----------------
+
+function addMessage(kind, html) {
+  const div = document.createElement("div");
+  div.className = `msg ${kind}`;
+  div.innerHTML = html;
+  $("messages").appendChild(div);
+  $("messages").scrollTop = $("messages").scrollHeight;
+  return div;
+}
+
+function renderSuggestions() {
+  for (const text of SUGGESTIONS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = text;
+    b.onclick = () => send(text);
+    $("suggestions").appendChild(b);
+  }
+}
+
+// ---------------- animation queue ----------------
+
+const queue = [];
+let pumping = false;
+const speed = () => parseFloat($("speed").value);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms * speed()));
+
+function enqueue(step) {
+  queue.push(step);
+  if (!pumping) pump();
+}
+
+async function pump() {
+  pumping = true;
+  while (queue.length) {
+    try { await queue.shift()(); } catch (e) { console.error(e); }
+  }
+  pumping = false;
+}
+
+function short(text, n = 30) {
+  text = String(text ?? "");
+  return text.length > n ? text.slice(0, n - 1) + "…" : text;
+}
+
+function packet(pathId, { label = "", color = "var(--packet)", reverse = false, dur = 900 } = {}) {
+  const path = $(pathId);
+  if (!path) return Promise.resolve();  // e.g. a refused call to a tool the agent does not have
+  const len = path.getTotalLength();
+  const g = document.createElementNS(SVG_NS, "g");
+  const dot = document.createElementNS(SVG_NS, "circle");
+  dot.setAttribute("r", 7);
+  dot.setAttribute("fill", color);
+  dot.setAttribute("filter", "url(#glow)");
+  g.appendChild(dot);
+  let tag = null;
+  if (label) {
+    tag = document.createElementNS(SVG_NS, "g");
+    tag.setAttribute("class", "packet-label");
+    const rect = document.createElementNS(SVG_NS, "rect");
+    const text = document.createElementNS(SVG_NS, "text");
+    text.textContent = label;
+    text.setAttribute("fill", "#0d0f14");
+    tag.append(rect, text);
+    g.appendChild(tag);
+  }
+  $("packets").appendChild(g);
+  if (tag) {
+    const box = tag.querySelector("text").getBBox();
+    const rect = tag.querySelector("rect");
+    rect.setAttribute("x", box.x - 6); rect.setAttribute("y", box.y - 3);
+    rect.setAttribute("width", box.width + 12); rect.setAttribute("height", box.height + 6);
+    rect.setAttribute("fill", color);
+  }
+  path.classList.add("lit");
+  const total = dur * speed();
+  return new Promise((resolve) => {
+    const start = performance.now();
+    function frame(now) {
+      const k = Math.min(1, (now - start) / total);
+      const e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      const p = path.getPointAtLength((reverse ? 1 - e : e) * len);
+      dot.setAttribute("cx", p.x); dot.setAttribute("cy", p.y);
+      if (tag) {
+        const w = tag.querySelector("rect").getAttribute("width") || 0;
+        const x = Math.max(4, Math.min(1000 - w - 4, p.x + 12));
+        tag.setAttribute("transform", `translate(${x - (tag.querySelector("text").getBBox().x - 6)},${p.y - 14})`);
+      }
+      if (k < 1) requestAnimationFrame(frame);
+      else {
+        path.classList.remove("lit");
+        g.style.transition = "opacity .25s";
+        g.style.opacity = 0;
+        setTimeout(() => g.remove(), 260);
+        resolve();
+      }
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+const node = (id) => $(id);
+function setActive(id, on) { node(id).classList.toggle("active", on); }
+function setThinking(agent, on) { node(`n-${agent}`).classList.toggle("thinking", on); }
+function setState(agent, text) { $(`s-${agent}`).textContent = short(text, 19); }
+function flash(id, cls, ms = 700) {
+  node(id).classList.add(cls);
+  setTimeout(() => node(id).classList.remove(cls), ms * speed());
+}
+
+function sticky(title, body) {
+  $("sticky-title").textContent = title;
+  $("sticky-body").textContent = typeof body === "string" ? body : JSON.stringify(body, null, 2);
+  const s = $("sticky");
+  s.classList.add("bump");
+  setTimeout(() => s.classList.remove("bump"), 200);
+}
+
+function consoleLine(text, cls = "") {
+  const div = document.createElement("div");
+  const m = text.match(/^\[(matcher|verifier|orchestrator|single)\]/);
+  div.className = cls || (m ? m[1] : "");
+  div.textContent = text;
+  $("console").appendChild(div);
+  $("console").scrollTop = $("console").scrollHeight;
+}
+
+function resetDiagram() {
+  for (const el of document.querySelectorAll(".node")) el.classList.remove("active", "thinking", "error", "read", "write");
+  setState("matcher", "лише читає");
+  setState("verifier", "єдиний пише");
+  for (const t of ["search_lost", "search_found", "confirm_match"]) $(`l-${t}`).textContent = "";
+  $("attempt").textContent = "";
+}
+
+// ---------------- event -> animation ----------------
+
+const DATA_OF = { search_lost: ["d-lost"], search_found: ["d-found"], confirm_match: ["d-lost", "d-found"] };
+let matcherAttempt = 0;
+let lastAgent = null;
+let typing = null;
+
+function resultLabel(tool, result) {
+  if (Array.isArray(result)) return result.length ? `[${result.map((r) => r.id).join(", ")}]` : "[] нічого";
+  if (result && result.status === "error") return result.error_code;
+  if (result && result.status === "success") return result.code || "OK";
+  return "ok";
+}
+
+function describeTyping(text) { if (typing) typing.textContent = text; }
+
+function handle(ev) {
+  switch (ev.type) {
+    case "log":
+      enqueue(async () => consoleLine(ev.message));
+      break;
+
+    case "request":
+      enqueue(async () => {
+        resetDiagram();
+        matcherAttempt = 0;
+        setActive("n-client", true);
+        sticky("Client → Matcher: запит", ev.text);
+        await packet("p-client-matcher", { label: short(ev.text, 34), color: "var(--client)" });
+        setActive("n-client", false);
+      });
+      break;
+
+    case "agent_start":
+      enqueue(async () => {
+        lastAgent = ev.agent;
+        if (ev.agent === "matcher") {
+          matcherAttempt += 1;
+          $("attempt").textContent = `спроба ${matcherAttempt}/3`;
+          if (ev.rejected && ev.rejected.length) {
+            const last = ev.rejected[ev.rejected.length - 1];
+            sticky("Verifier → Matcher: відмова + hint", last);
+            await packet("p-verifier-matcher", { label: `hint: ${last.error_code}`, color: "var(--warn)" });
+          }
+          setActive("n-verifier", false);
+          setActive("n-matcher", true);
+          setState("matcher", "аналізує запит…");
+          describeTyping("Matcher шукає кандидата…");
+        } else {
+          setActive("n-matcher", false);
+          setActive("n-verifier", true);
+          setState("verifier", "перевіряє пару…");
+          describeTyping("Verifier перевіряє збіг…");
+        }
+      });
+      break;
+
+    case "llm_start":
+      if (!ev.agent) break;
+      enqueue(async () => {
+        setThinking(ev.agent, true);
+        setState(ev.agent, ev.final ? "формує відповідь…" : "думає (LLM)…");
+      });
+      break;
+
+    case "llm_end":
+      if (!ev.agent) break;
+      enqueue(async () => setThinking(ev.agent, false));
+      break;
+
+    case "tool_start":
+      enqueue(async () => {
+        const agent = ev.agent || lastAgent || "matcher";
+        const args = ev.arguments || {};
+        const label = ev.tool === "confirm_match"
+          ? `confirm_match(${args.lost_id}, ${args.found_id})`
+          : `${ev.tool}("${short(args.query, 22)}"${args.date_from ? ", від " + args.date_from : ""}${args.date_to ? ", до " + args.date_to : ""})`;
+        sticky(`${agent} → ${ev.tool}: виклик через MCP`, args);
+        setState(agent, `→ ${ev.tool}`);
+        setActive(`t-${ev.tool}`, true);
+        await packet(`p-${agent}-${ev.tool}`, { label, color: "var(--tool)" });
+      });
+      break;
+
+    case "tool_end":
+      enqueue(async () => {
+        const agent = ev.agent || lastAgent || "matcher";
+        const tool = ev.tool;
+        const toolNode = `t-${tool}`;
+        if (!$(toolNode)) return;
+        const result = ev.result;
+        const isError = result && result.status === "error";
+        const blocked = isError && ["REPEATED_CALL", "TOOL_NOT_ALLOWED"].includes(result.error_code);
+        if (!blocked) {
+          // the tool reads the CSV files
+          const reads = DATA_OF[tool] || [];
+          reads.forEach((d) => flash(d, "read"));
+          const down = tool === "confirm_match" ? "p-confirm_match-lost" : `p-${tool}-${tool === "search_lost" ? "lost" : "found"}`;
+          await packet(down, { label: "читає CSV", color: "#b79bff", dur: 550 });
+          if (tool === "confirm_match") packet("p-confirm_match-found", { color: "#b79bff", dur: 550 });
+          if (tool === "confirm_match" && result && result.status === "success") {
+            flash("d-matches", "write", 1400);
+            await packet("p-confirm_match-matches", { label: "+ рядок", color: "var(--ok)", dur: 650 });
+          }
+        }
+        const label = resultLabel(tool, result);
+        $(`l-${tool}`).textContent = `→ ${short(label, 24)}`;
+        node(toolNode).classList.toggle("error", isError);
+        sticky(`${tool} → ${agent}: результат${ev.ms !== undefined ? ` (${ev.ms} мс)` : ""}`, result);
+        await packet(`p-${agent}-${tool}`, { label, reverse: true, color: isError ? "var(--err)" : "var(--tool)" });
+        setActive(toolNode, false);
+        setState(agent, isError ? `відмова: ${result.error_code}` : "отримав результат");
+      });
+      break;
+
+    case "handoff":
+      enqueue(async () => {
+        const h = ev.handoff;
+        const candidate = h.direction === "found" ? h.lost_id : h.found_id;
+        const own = h.direction === "found" ? h.found_id : h.lost_id;
+        if (!candidate) {
+          setState("matcher", "кандидата немає");
+          sticky("Matcher: кандидата немає", h);
+          return;
+        }
+        if (!own) {
+          setState("matcher", `кандидат ${candidate}`);
+          sticky("Matcher: лише кандидат (вільний текст, записувати нічого)", h);
+          return;
+        }
+        setState("matcher", `кандидат ${candidate}`);
+        sticky("Matcher → Verifier: handoff", { lost_id: h.lost_id, found_id: h.found_id, reason: h.reason });
+        await packet("p-matcher-verifier", { label: `{${h.lost_id}, ${h.found_id}}`, color: "var(--agent)" });
+        setActive("n-matcher", false);
+      });
+      break;
+
+    case "verdict":
+      enqueue(async () => {
+        const v = ev.verdict;
+        const text = v.status === "confirmed" ? "✓ підтверджено" : `✗ ${v.error_code || v.status}`;
+        setState("verifier", text);
+        sticky(`Verifier: вердикт — ${v.status}`, v);
+        await sleep(400);
+      });
+      break;
+
+    case "result":
+      enqueue(async () => {
+        const r = ev.result;
+        const lastAttempt = r.attempts[r.attempts.length - 1] || {};
+        sticky("Відповідь клієнту", { status: r.status, match: r.match, reply: r.reply });
+        if (lastAttempt.verdict) {
+          await packet("p-verifier-client", { label: STATUS_LABEL[r.status] || r.status, color: r.status === "confirmed" ? "var(--ok)" : "var(--warn)", dur: 1200 });
+        } else {
+          await packet("p-client-matcher", { label: STATUS_LABEL[r.status] || r.status, reverse: true, color: "var(--warn)" });
+        }
+        setMatchesCount(ev.matches.length);
+        setActive("n-client", true);
+        setTimeout(() => setActive("n-client", false), 900);
+        for (const id of ["n-matcher", "n-verifier"]) setActive(id, false);
+        finishReply(r.status, r.reply);
+      });
+      break;
+
+    case "error":
+      enqueue(async () => {
+        consoleLine(ev.message, "err");
+        finishReply("error", `Щось пішло не так: ${ev.message}\nПеревірте, чи запущена Ollama (ollama serve).`);
+      });
+      break;
+  }
+}
+
+function finishReply(status, text) {
+  if (typing) { typing.remove(); typing = null; }
+  addMessage("bot", `<span class="status ${status}">${STATUS_LABEL[status] || status}</span>\n${withIdChips(text)}`);
+  setBusy(false);
+}
+
+function setBusy(on) {
+  busy = on;
+  $("send").disabled = on;
+  $("reset").disabled = on;
+  for (const b of $("suggestions").querySelectorAll("button")) b.disabled = on;
+}
+
+async function send(text) {
+  text = text.trim();
+  if (!text || busy) return;
+  setBusy(true);
+  $("text").value = "";
+  addMessage("user", withIdChips(text));
+  typing = addMessage("bot typing", "Агенти беруться до роботи…");
+  consoleLine(`$ ${text}`, "orchestrator");
+
+  let response;
+  try {
+    response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+  } catch (e) {
+    return handle({ type: "error", message: String(e) });
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return handle({ type: "error", message: body.error || response.statusText });
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (line) handle(JSON.parse(line));
+    }
+  }
+}
+
+$("form").addEventListener("submit", (e) => { e.preventDefault(); send($("text").value); });
+$("reset").addEventListener("click", async () => {
+  const response = await fetch("/api/reset", { method: "POST" });
+  const data = await response.json();
+  if (response.ok) {
+    setMatchesCount(data.matches.length);
+    consoleLine("$ matches.csv очищено");
+    flash("d-matches", "read");
+  } else consoleLine(data.error, "err");
+});
+
+renderSuggestions();
+loadData();
+</script>
+</body>
+</html>
