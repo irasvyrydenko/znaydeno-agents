@@ -20,6 +20,14 @@ MATCHES = ROOT / "data" / "processed" / "matches.csv"
 
 
 @pytest.fixture(autouse=True)
+def isolate_user_posts(monkeypatch, tmp_path):
+    """Posts created from free-text requests go to a temporary folder, not data/processed/."""
+    from lostfound import server_v2
+    for name in list(server_v2.USER_POSTS):
+        monkeypatch.setitem(server_v2.USER_POSTS, name, tmp_path / f"user_{name}")
+
+
+@pytest.fixture(autouse=True)
 def restore_matches():
     original = MATCHES.read_bytes()
     with MATCHES.open("w", encoding="utf-8", newline="") as file:
@@ -235,18 +243,45 @@ def test_orchestrator_found_direction_retries_on_lost_side(monkeypatch):
     assert set(verifier_inputs[0]) == {"lost_id", "found_id", "reason"}
 
 
-def test_orchestrator_found_free_text_does_not_write(monkeypatch):
-    async def fake_matcher(request, rejected=None, model=None):
-        return {"lost_id": "L07", "found_id": None, "reason": "читацький у 242", "direction": "found"}
+def test_free_text_becomes_a_post_and_reaches_the_verifier(monkeypatch):
+    seen = {}
 
-    async def fail_verifier(handoff, posts=None, model=None):
-        raise AssertionError("nothing to record without a found post")
+    async def fake_matcher(request, rejected=None, model=None):
+        seen["request"] = request
+        new_id = request.split(":")[0]
+        return {"lost_id": "L07", "found_id": new_id, "reason": "читацький у 242", "direction": "found"}
+
+    async def fake_verifier(handoff, posts=None, model=None):
+        seen["posts"] = posts
+        return {"status": "confirmed", "error_code": None, "message": "ок", "hint": "", "retryable": True, **handoff}
 
     monkeypatch.setattr(orchestrator, "run_matcher", fake_matcher)
-    monkeypatch.setattr(orchestrator, "run_verifier", fail_verifier)
+    monkeypatch.setattr(orchestrator, "run_verifier", fake_verifier)
     result = asyncio.run(orchestrator.run_system("Знайшла читацький у 242, чий?"))
-    assert result["status"] == "candidate_only"
-    assert "L07" in result["reply"] and "F.." in result["reply"]
+    new_id = result["posted"]["id"]
+    assert new_id == "F33"  # the dataset ends at F32
+    assert seen["request"].startswith("F33: ")
+    assert seen["posts"]["found"]["text"] == "Знайшла читацький у 242, чий?"
+    assert result["match"] == {"lost_id": "L07", "found_id": "F33"}
+
+
+def test_ingest_leaves_requests_with_ids_alone():
+    from lostfound.agents.posts import ingest
+    assert ingest("Допоможи знайти L03") == ("Допоможи знайти L03", None)
+    request, post = ingest("загубила зарядку в трапезній")
+    assert post["id"] == "L26" and request == "L26: загубила зарядку в трапезній"
+    request, post = ingest("загубила ще й парасольку")
+    assert post["id"] == "L27"
+
+
+def test_new_post_is_searchable_and_matchable():
+    from lostfound.agents.posts import add_post
+    from lostfound.server_v2 import confirm_match, search_lost
+    post = add_post("lost", "загубила зарядку лайтнінг у трапезній на Свєнца")
+    assert post["id"] in [r["id"] for r in getattr(search_lost, "fn", search_lost)("зарядка лайтнінг трапезній")]
+    result = getattr(confirm_match, "fn", confirm_match)(post["id"], "F04", "Зарядка лайтнінг у трапезній на Свєнца.")
+    assert result["status"] == "success"
+    assert rows() == [(post["id"], "F04")]
 
 
 def test_hint_offers_lost_side_alternatives():
@@ -293,13 +328,13 @@ def test_verifier_sees_both_posts(monkeypatch):
 
 
 def test_repeated_call_does_not_hide_the_real_refusal(monkeypatch):
-    weak = tool_call("confirm_match", lost_id="L10", found_id="F19", reason="Пропуск, обидва без підпису.")
-    script_llm(monkeypatch, [check(), reply(calls=[weak]), reply(calls=[weak]), reply("Відмова.")])
-    handoff = {"lost_id": "L10", "found_id": "F19", "reason": "пропуск"}
+    early = tool_call("confirm_match", lost_id="L06", found_id="F22", reason="Зелений картхолдер з леокартом у ЦШ.")
+    script_llm(monkeypatch, [check(), reply(calls=[early]), reply(calls=[early]), reply("Відмова.")])
+    handoff = {"lost_id": "L06", "found_id": "F22", "reason": "картхолдер ЦШ"}
     verdict = asyncio.run(verifier.run_verifier(handoff))
     assert verdict["status"] == "rejected"
-    assert verdict["error_code"] == "WEAK_MATCH"
-    assert "Запитайте у власника" in verdict["hint"]
+    assert verdict["error_code"] == "FOUND_BEFORE_LOST"
+    assert "F23" in verdict["hint"]
 
 
 def test_orchestrator_passes_posts_and_treats_vague_as_needs_details(monkeypatch):
@@ -328,12 +363,12 @@ def test_orchestrator_passes_posts_and_treats_vague_as_needs_details(monkeypatch
     ({"same_item": False}, "different_item"),
     ({"place_conflict": True, "lost_place": "242", "found_place": "Стрийський парк"}, "contradiction"),
     ({"contradictions": ["lost: чорні / found: білі"]}, "contradiction"),
-    ({"shared_specific": []}, "too_vague"),
     ({}, None),
 ])
 def test_judge(overrides, problem):
     passing = json.loads(check().message.content)
-    posts = {"lost": {"id": "L03"}, "found": {"id": "F07"}}
+    posts = {"lost": {"id": "L03", "text": "загубила чорні великі JBL навушники в церкві"},
+             "found": {"id": "F07", "text": "в церкві на кріслі лежать великі чорні навушники JBL"}}
     got, message = verifier.judge({**passing, **overrides}, {"lost_id": "L03", "found_id": "F07"}, posts)
     assert got == problem
     assert bool(message) == bool(problem)
@@ -368,3 +403,40 @@ def test_orchestrator_unresolved_reply_names_the_refusal(monkeypatch):
     assert result["status"] == "unresolved"
     assert "чорний і білий павербанк" in result["reply"]
     assert "Інших кандидатів немає" in result["reply"]
+
+
+def test_no_place_conflict_when_one_post_names_no_place(monkeypatch):
+    # L10 names no place, so the refusal must be "too vague", not "different places"
+    script_llm(monkeypatch, [check(place_conflict=True, lost_place="", found_place="на столі в трапезній",
+                                   shared_specific=[], missing_details="колір і бренд")])
+    verdict = asyncio.run(verifier.run_verifier({"lost_id": "L10", "found_id": "F19", "reason": "пропуск"}))
+    assert verdict["status"] == "declined" and verdict["problem"] == "too_vague"
+    assert "колір і бренд" in verdict["hint"] and "колір і бренд" in verdict["ask_owner"]
+
+
+@pytest.mark.parametrize("text, kept", [
+    ("lost: чорні / found: білі", True),
+    ("lost: / / found: коричневі", False),
+    ("lost:  / found: Marshall", False),
+    ("колір різний", True),
+])
+def test_contradiction_needs_both_sides(text, kept):
+    assert verifier._both_sides(text) is kept
+
+
+def test_place_quoted_from_the_other_post_is_ignored():
+    post = {"text": "загубила чорні навушники"}
+    assert verifier._quoted_from("віднесла в охоронця К2", post) == ""
+    assert verifier._quoted_from("в 242 на Свєнціцького", {"text": "Забула його в 242 на Свєнціцького"}) == "в 242 на Свєнціцького"
+
+
+@pytest.mark.parametrize("lost_text, found_text, problem", [
+    ("загубила чорні навушники", "в церкві на кріслі лежать великі чорні навушники JBL", "too_vague"),
+    ("загубила ключ-пропуск", "пропуск лежав на столі в трапезній", "too_vague"),
+    ("загубила зелений картхолдер з леокартом у ЦШ", "зелений картхолдер на сходах у ЦШ", None),
+    ("ніхто не бачив сіру куртку? залишила в лекторії", "знайдена сіра куртка в лекторії", None),
+])
+def test_judge_needs_more_than_colour(lost_text, found_text, problem):
+    passing = json.loads(check().message.content)
+    posts = {"lost": {"id": "L99", "text": lost_text}, "found": {"id": "F99", "text": found_text}}
+    assert verifier.judge(passing, {"lost_id": "L99", "found_id": "F99"}, posts)[0] == problem

@@ -18,3 +18,5 @@ __pycache__/
 venv/
 .pytest_cache/
 *.egg-info/
+# Posts people add through the system (free-text requests)
+data/processed/user_*.csv

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import csv
 import json
 import logging
 import re
@@ -27,7 +26,7 @@ import sys
 from datetime import date
 
 from lostfound.agents.base import ask_json, log, run_tool_loop
-from lostfound.server_v2 import DATA_DIR
+from lostfound.server_v2 import _read_posts
 from lostfound.tracing import flush, traced
 
 AGENT = "matcher"
@@ -145,8 +144,8 @@ DIRECTIONS = {
 
 
 def _posts(filename: str) -> dict[str, dict[str, str]]:
-    with (DATA_DIR / filename).open(encoding="utf-8", newline="") as file:
-        return {row["id"]: row for row in csv.DictReader(file)}
+    """Dataset posts plus posts people added through the system, by id."""
+    return {row["id"]: row for row in _read_posts(filename)}
 
 
 def detect_direction(request: str) -> str:

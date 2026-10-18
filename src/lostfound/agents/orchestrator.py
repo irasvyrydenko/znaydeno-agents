@@ -21,7 +21,7 @@ import sys
 
 from lostfound.agents.base import log
 from lostfound.agents.matcher import run_matcher
-from lostfound.agents.posts import pair_posts
+from lostfound.agents.posts import ingest, pair_posts
 from lostfound.agents.verifier import run_verifier
 from lostfound.tracing import flush, record, traced
 
@@ -58,7 +58,8 @@ def _reply(status: str, attempts: list[dict], match: dict | None) -> str:
         return f"{verdict.get('message', '')} {verdict.get('hint', '')}".strip()
     if status == "needs_details":
         weak = next(a["verdict"] for a in reversed(attempts) if _needs_details(a.get("verdict") or {}))
-        return f"Не можу підтвердити збіг: {weak['message']} {weak['hint']}".strip()
+        advice = weak.get("ask_owner") or weak["hint"]
+        return f"Не можу підтвердити збіг: {weak['message']} {advice}".strip()
     if status == "unresolved":
         # The last attempt may have no verdict: the Matcher found nobody else after a refusal
         refused = next((a["verdict"] for a in reversed(attempts) if a.get("verdict")), {})
@@ -78,6 +79,10 @@ async def run_system(request: str, model: str | None = None) -> dict:
     status: confirmed | no_match | needs_details | already_matched | unresolved | candidate_only
     """
     record("request", mode="multi", request=request)
+    # A free-text request is a new chat post; from here on it goes like "Допоможи знайти L03"
+    request, posted = ingest(request)
+    if posted:
+        log.info("[orchestrator] new post %s: %s", posted["id"], posted["text"])
     attempts: list[dict] = []
     rejected: list[dict] = []
     status, match = "no_match", None
@@ -122,6 +127,7 @@ async def run_system(request: str, model: str | None = None) -> dict:
 
     result = {
         "request": request,
+        "posted": posted,
         "status": status,
         "match": match,
         "reply": _reply(status, attempts, match),
