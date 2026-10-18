@@ -16,6 +16,7 @@ import sys
 
 from lostfound.agents.base import log, run_tool_loop
 from lostfound.agents.matcher import build_request, date_guard
+from lostfound.agents.posts import ingest
 from lostfound.tracing import flush, record, traced
 
 AGENT = "single"
@@ -56,6 +57,10 @@ Finish with a short answer in Ukrainian for the person: what was recorded, or wh
 @traced("single_agent")
 async def run_single(request: str, model: str | None = None) -> dict:
     record("request", mode="single", request=request)
+    # Same as the two-agent system: a free-text request is saved as a new post first
+    request, posted = ingest(request)
+    if posted:
+        log.info("[%s] new post %s: %s", AGENT, posted["id"], posted["text"])
     user, post, direction = build_request(request)
     run = await run_tool_loop(
         AGENT, SYSTEM_PROMPT, user, ALL_TOOLS, model=model, max_steps=10,
@@ -65,6 +70,7 @@ async def run_single(request: str, model: str | None = None) -> dict:
     success = next((r for r in confirms if r.get("status") == "success"), None)
     result = {
         "request": request,
+        "posted": posted,
         "status": "confirmed" if success else "not_confirmed",
         "reply": run.final_text or (success or {}).get("message", ""),
         "confirm_attempts": len(confirms),

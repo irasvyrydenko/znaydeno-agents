@@ -1,7 +1,8 @@
 """FastMCP server for searching and confirming lost-and-found items.
 
-Reads only data/processed/lost.csv and found.csv; confirm_match is the only writer
-(data/processed/matches.csv). Never reads data/eval/.
+Reads only data/processed/: lost.csv and found.csv, plus user_lost.csv and user_found.csv
+(posts people added through the system; written by the orchestrator, never by the tools).
+confirm_match is the only writer of data/processed/matches.csv. Never reads data/eval/.
 """
 
 from __future__ import annotations
@@ -18,6 +19,9 @@ from fastmcp import FastMCP
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "processed"
 MATCHES_PATH = DATA_DIR / "matches.csv"
+# Posts written by people through the system (free-text requests), kept apart from the dataset
+USER_POSTS = {"lost.csv": DATA_DIR / "user_lost.csv", "found.csv": DATA_DIR / "user_found.csv"}
+POST_FIELDS = ["id", "posted_at", "event_date", "author", "status", "text"]
 MATCH_FIELDS = ["lost_id", "found_id", "reason", "confirmed_at"]
 
 # A post is returned by search only if it covers at least this share of the query words
@@ -154,8 +158,13 @@ def _colors(text: str) -> set[str]:
 
 
 def _read_posts(filename: str) -> list[dict[str, str]]:
-    with (DATA_DIR / filename).open(encoding="utf-8", newline="") as file:
-        return list(csv.DictReader(file))
+    """Dataset posts plus posts that people added through the system."""
+    rows = []
+    for path in (DATA_DIR / filename, USER_POSTS[filename]):
+        if path.exists():
+            with path.open(encoding="utf-8", newline="") as file:
+                rows.extend(csv.DictReader(file))
+    return rows
 
 
 def _read_matches() -> list[dict[str, str]]:

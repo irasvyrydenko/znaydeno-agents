@@ -8,8 +8,8 @@ plus both posts of the pair, which the orchestrator reads from the CSV files (se
 It checks what confirm_match cannot, in two steps:
 1. Check (LLM, no tools): the model compares the two posts and fills in a structured check:
    the item and the place in each post (quoted), conflicts, specific details both posts share.
-   Code then decides: a pair passes only with the same item, no conflict and something specific
-   in common. A claimed place conflict is dropped in code when both places name the same room
+   Code then decides: a pair passes only with the same item, no conflict, and at least two
+   shared details besides colour (the item and one more: brand, place, room), counted in code. A claimed place conflict is dropped in code when both places name the same room
    or spot. The Matcher's reason is not judged: the Verifier compares the posts themselves and
    writes its own reason, so a right pair described badly is still right.
 2. Record (LLM with confirm_match): only after the check passes. Dates, ids and already-matched
@@ -29,11 +29,12 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 import sys
 
 from lostfound.agents.base import ask_json, log, run_tool_loop
 from lostfound.agents.posts import pair_posts
-from lostfound.server_v2 import PLACE_GROUP, PLACE_STEMS, PLACE_WORDS, _shared_words, _tokens
+from lostfound.server_v2 import PLACE_GROUP, PLACE_STEMS, PLACE_WORDS, _is_color, _shared_words, _tokens
 from lostfound.tracing import flush, traced
 
 AGENT = "verifier"
@@ -57,7 +58,9 @@ CHECK_INSTRUCTION = """Fill in the check as JSON. Quote the posts exactly.
 - contradictions: attributes that BOTH posts state and that differ (colour, brand, size, marks), as "lost: ... / found: ...";
   a detail written in only one post is not a contradiction; [] if none.
 - shared_specific: specific details written in both posts besides the item type (colour, brand, mark, exact room); [] if none.
-- missing_details: in Ukrainian, what to ask the owner to be sure, or ""."""
+- missing_details: in Ukrainian, which kinds of details to ask the owner for (колір, бренд, розмір, особливі
+  прикмети, точне місце), or "". Never write the found post's details themselves: whoever reads the answer
+  could then claim the item by repeating them."""
 
 CHECK_SCHEMA = {
     "type": "object",
@@ -117,6 +120,27 @@ BUILDINGS = PLACE_GROUP | PLACE_WORDS
 FLOOR_STEMS = ("поверс", "поверх")
 
 
+CONTRADICTION = re.compile(r"lost:\s*(.*?)\s*/\s*found:\s*(.*)", re.I | re.S)
+
+
+def _both_sides(contradiction: str) -> bool:
+    """A contradiction needs the attribute in both posts; "lost: (nothing) / found: Marshall" is a
+    detail written in only one post, which the model sometimes lists anyway."""
+    match = CONTRADICTION.search(contradiction)
+    if not match:
+        return bool(contradiction.strip())
+    return all(side.strip(" /-—\"'«»") for side in match.groups())
+
+
+def _quoted_from(quote: str, post: dict | None) -> str:
+    """The quote if its words are in the post, otherwise "" (not a quote from this post)."""
+    terms = _tokens(quote)
+    if not post or not terms:
+        return ""
+    shared = _shared_words(terms, post["text"])
+    return quote.strip() if len(shared) * 2 >= len(terms) else ""
+
+
 def _same_spot(lost_place: str, found_place: str) -> bool:
     """Both places name the same room number or spot ("342", "трапезна"), not just the same building."""
     shared = _shared_words(_tokens(lost_place), found_place)
@@ -141,9 +165,14 @@ def judge(check: dict, handoff: dict, posts: dict) -> tuple[str | None, str]:
         )
     if check["contradictions"]:
         return "contradiction", "Деталі суперечать одна одній: " + "; ".join(check["contradictions"]) + "."
-    if not check.get("shared_specific"):
+    # Counted in code, not taken from the model: besides colour, the posts must share at least two
+    # details, the item and one more (brand, place, room); "чорні навушники" fits too many posts
+    shared = _shared_words(_tokens(posts["lost"]["text"]), posts["found"]["text"])
+    specific = [w for w in shared if not _is_color(w)]
+    if len(specific) < 2:
+        common = ", ".join(shared) or "нічого"
         return "too_vague", (
-            f"Спільний лише тип речі («{check.get('lost_item', '')}»), більше жодної ознаки, щоб відрізнити її від інших."
+            f"Спільного замало ({common}): під такий опис підходить не одна знахідка."
         )
     return None, ""
 
@@ -187,22 +216,31 @@ async def run_verifier(handoff: dict, posts: dict | None = None, model: str | No
     # Step 1: compare the posts, no tools
     check = ask_json([{"role": "system", "content": CHECK_PROMPT}, {"role": "user", "content": case}],
                      CHECK_INSTRUCTION, CHECK_SCHEMA, model=model)
-    check["contradictions"] = [c for c in check.get("contradictions", []) if str(c).strip()]
-    if check.get("place_conflict") and _same_spot(check.get("lost_place", ""), check.get("found_place", "")):
+    check["contradictions"] = [c for c in check.get("contradictions", []) if _both_sides(str(c))]
+    # A place must be quoted from its own post; the model sometimes copies the other post's place
+    lost_place = _quoted_from(str(check.get("lost_place", "")), posts.get("lost"))
+    found_place = _quoted_from(str(check.get("found_place", "")), posts.get("found"))
+    check["lost_place"], check["found_place"] = lost_place, found_place
+    if check.get("place_conflict") and (not lost_place or not found_place):
+        log.info("[%s] place conflict dropped: one of the posts names no place", AGENT)
+        check["place_conflict"] = False
+    if check.get("place_conflict") and _same_spot(lost_place, found_place):
         log.info("[%s] place conflict dropped: both places name the same spot", AGENT)
         check["place_conflict"] = False
     verdict["check"] = check
     log.info("[%s] check: %s", AGENT, json.dumps(check, ensure_ascii=False))
     problem, message = judge(check, handoff, posts)
     if problem:
-        missing = str(check.get("missing_details", "")).strip()
+        missing = str(check.get("missing_details", "")).strip().rstrip(".")
+        ask_owner = f"Уточніть, будь ласка: {missing}." if missing and problem == "too_vague" else ""
         verdict.update(
             status="declined",
             error_code="VERIFIER_DECLINED",
             problem=problem,
             message=message,
-            hint=(f"Запитайте у власника: {missing}. " if missing and problem == "too_vague" else "")
-            + "Запропонуйте іншого кандидата, який не має цієї проблеми.",
+            # hint goes to the Matcher, ask_owner to the person
+            hint=(f"{ask_owner} " if ask_owner else "") + "Запропонуйте іншого кандидата, який не має цієї проблеми.",
+            ask_owner=ask_owner,
         )
         log.info("[%s] verdict: %s", AGENT, json.dumps(verdict, ensure_ascii=False))
         return verdict

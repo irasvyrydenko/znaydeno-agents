@@ -4,7 +4,8 @@ A test passes when matches.csv ends up holding exactly the pair from data/eval/g
 for the post the query names, L.. or F.. (or nothing, when no true match exists or the query is free text). For posts that must be refused (expected_refusal),
 confirm_match must not be called at all. Only this runner reads data/eval/; agents never do.
 
-matches.csv is cleared before every test and restored to its original content at the end.
+matches.csv and the user posts (user_lost.csv, user_found.csv) are cleared before every test
+and restored to their original content at the end.
 
 Usage:
     python evals/run_evals.py                  # both modes, the 5 main tests
@@ -26,7 +27,7 @@ from pathlib import Path
 from lostfound.agents.base import log, model_name
 from lostfound.agents.orchestrator import run_system
 from lostfound.agents.single import run_single
-from lostfound.server_v2 import MATCH_FIELDS, MATCHES_PATH
+from lostfound.server_v2 import MATCH_FIELDS, MATCHES_PATH, USER_POSTS
 from lostfound.tracing import TRACE_PATH, flush
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,8 +48,12 @@ def load_tests(extra: bool) -> list[dict]:
     return tests
 
 
-def expected_outcome(query: str, truth: dict) -> tuple[set[tuple[str, str]], bool]:
-    """(pairs that must be in matches.csv, whether confirm_match must not be called)."""
+def expected_outcome(query: str, truth: dict, test: dict | None = None,
+                     posted: dict | None = None) -> tuple[set[tuple[str, str]], bool]:
+    """(pairs that must be in matches.csv, whether confirm_match must not be called).
+
+    A free-text query is saved as a new post; tests.json then names its true counterpart
+    ("expect_lost" / "expect_found"), and the pair is that counterpart with the new post."""
     lost_match, found_match = LOST_ID.search(query), FOUND_ID.search(query)
     if lost_match:
         lost_id = lost_match.group()
@@ -57,13 +62,20 @@ def expected_outcome(query: str, truth: dict) -> tuple[set[tuple[str, str]], boo
     if found_match:
         found_id = found_match.group()
         return {(m["lost"], m["found"]) for m in truth["true_matches"] if m["found"] == found_id}, False
-    # Free text names no post in the chat, so nothing may be written
+    test = test or {}
+    if posted and test.get("expect_lost"):
+        return {(test["expect_lost"], posted["id"])}, False
+    if posted and test.get("expect_found"):
+        return {(posted["id"], test["expect_found"])}, False
     return set(), False
 
 
 def reset_matches() -> None:
     with MATCHES_PATH.open("w", encoding="utf-8", newline="") as file:
         csv.DictWriter(file, fieldnames=MATCH_FIELDS).writeheader()
+    # Every test starts from the dataset alone: no posts left by earlier tests or by the UI
+    for path in USER_POSTS.values():
+        path.unlink(missing_ok=True)
 
 
 def written_pairs() -> list[dict]:
@@ -97,7 +109,7 @@ async def run_one(mode: str, test: dict, truth: dict, model: str) -> dict:
 
     rows = written_pairs()
     got = {(r["lost_id"], r["found_id"]) for r in rows}
-    want, must_refuse = expected_outcome(test["query"], truth)
+    want, must_refuse = expected_outcome(test["query"], truth, test, result.get("posted") if result else None)
     calls = confirm_calls(mode, result) if result else 0
 
     problems = []
@@ -155,6 +167,7 @@ async def main_async(args) -> None:
     model = args.model or model_name()
 
     original = MATCHES_PATH.read_bytes() if MATCHES_PATH.exists() else None
+    user_posts = {path: path.read_bytes() for path in USER_POSTS.values() if path.exists()}
     runs: dict[str, list[dict]] = {}
     try:
         for mode in modes:
@@ -169,6 +182,10 @@ async def main_async(args) -> None:
             MATCHES_PATH.unlink(missing_ok=True)
         else:
             MATCHES_PATH.write_bytes(original)
+        for path in USER_POSTS.values():
+            path.unlink(missing_ok=True)
+        for path, content in user_posts.items():
+            path.write_bytes(content)
         flush()
 
     out = RESULTS_DIR / datetime.now().strftime("%Y%m%d-%H%M%S")
