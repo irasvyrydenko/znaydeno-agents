@@ -46,8 +46,10 @@ def ids(rows: list[dict]) -> list[str]:
 
 @pytest.fixture(autouse=True)
 def restore_matches():
-    """Every test may write to matches.csv; put the original back afterwards."""
+    """Every test starts from an empty matches.csv (rows left by manual runs would turn
+    expected results into ALREADY_MATCHED) and gets the original back afterwards."""
     original = MATCHES.read_bytes()
+    MATCHES.write_text(original.decode("utf-8").splitlines()[0] + "\n", encoding="utf-8")
     yield
     MATCHES.write_bytes(original)
 

@@ -40,6 +40,9 @@ How to work:
    set date_to only to its event_date and never date_from. Never invent dates. Do not repeat a query; at most 4 searches.
 3. Choose a candidate only if the item type is the same and nothing contradicts (colour, brand, place).
    Places are often abbreviated: "СВ", "Свєнца" and "Свєнціцького" are the same building.
+   Places nest: a room or spot ("трапезна", "304", "242", "церква", "сходи") is inside a building ("СВ", "ЦШ", "К2").
+   A post that names a spot and its building agrees with a request that names only one of them.
+   Places contradict only when two places of the same kind differ (304 vs 211, ЦШ vs СВ).
 4. If a candidate fits and the request names a post id (L.. or F..), call confirm_match(lost_id, found_id, reason)
    with your reason in Ukrainian.
    If confirm_match refuses, follow its hint: try another candidate (at most 3 attempts in total) or stop.
