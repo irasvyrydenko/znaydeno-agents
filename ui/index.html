@@ -163,15 +163,16 @@ form.input button { background: #2b5cff; border-color: #2b5cff; color: white; pa
       <option value="0.5">швидко</option>
     </select>
   </label>
-  <button id="reset" title="Очистити data/processed/matches.csv">Очистити matches.csv</button>
+  <button id="reset" title="Очистити matches.csv і оголошення, написані через чат">Очистити</button>
 </header>
 
 <main>
   <section class="chat">
     <div class="messages" id="messages">
       <div class="intro">
-        Напишіть, що ви <b>загубили</b> або <b>знайшли</b>. Щоб збіг записався в базу, назвіть оголошення з чату:
-        <b>«Допоможи знайти L06»</b> (втрата) чи <b>«Чиє це? F07»</b> (знахідка).
+        Напишіть, що ви <b>загубили</b> або <b>знайшли</b>, своїми словами: ваше повідомлення стане новим оголошенням
+        (<span class="idchip L">L26</span>, <span class="idchip F">F33</span>…), і агенти шукатимуть до нього пару.
+        Можна й послатися на оголошення з датасету: <b>«Допоможи знайти L06»</b>, <b>«Чиє це? F07»</b>.
         Наведіть курсор на <span class="idchip L">L06</span> чи <span class="idchip F">F23</span>, щоб побачити текст оголошення.
       </div>
     </div>
@@ -197,7 +198,7 @@ form.input button { background: #2b5cff; border-color: #2b5cff; color: white; pa
         <text class="layer-label" x="186" y="70" fill="var(--agent)">Agents Layer</text>
         <rect class="layer" x="180" y="352" width="790" height="160" fill="var(--tool-layer)" stroke="var(--tool)"/>
         <text class="layer-label" x="196" y="374" fill="var(--tool)">MCP Server · lostfound</text>
-        <rect class="layer" x="180" y="560" width="790" height="186" fill="var(--data-layer)" stroke="var(--data)"/>
+        <rect class="layer" x="180" y="560" width="790" height="180" fill="var(--data-layer)" stroke="var(--data)"/>
         <text class="layer-label" x="196" y="582" fill="#b79bff">Data Layer</text>
 
         <!-- edges -->
@@ -213,6 +214,8 @@ form.input button { background: #2b5cff; border-color: #2b5cff; color: white; pa
         <path id="p-confirm_match-matches" class="edge" d="M830,492 L830,604"/>
         <path id="p-confirm_match-lost" class="edge faint" d="M748,492 C700,552 380,548 340,604"/>
         <path id="p-confirm_match-found" class="edge faint" d="M772,492 C745,548 620,552 598,604"/>
+        <path id="p-client-lost" class="edge faint" d="M75,212 L75,648 Q75,660 87,660 L238,660"/>
+        <path id="p-client-found" class="edge faint" d="M75,212 L75,736 Q75,750 89,750 L556,750 Q570,750 570,738 L570,724"/>
 
         <text id="attempt" class="attempt" x="580" y="174"></text>
 
@@ -305,13 +308,15 @@ const posts = {};           // id -> post row, for tooltips
 let busy = false;
 
 const SUGGESTIONS = [
+  "Загубила зарядку лайтнінг у трапезній на Свєнца",
+  "Загубила чорні навушники",
+  "Знайшла читацький на підвіконні в 242 Свєнціцького, чий він?",
   "Допоможи знайти L06",
   "Допоможи знайти L03",
   "Чиє це? F22",
   "Чиє це? F07",
   "Допоможи знайти L10",
   "Допоможи знайти L22",
-  "Я загубила чорні великі навушники JBL у церкві",
 ];
 
 const STATUS_LABEL = {
@@ -327,7 +332,10 @@ const STATUS_LABEL = {
 // ---------------- data ----------------
 
 async function loadData() {
-  const data = await (await fetch("/api/data")).json();
+  applyData(await (await fetch("/api/data")).json());
+}
+
+function applyData(data) {
   for (const row of [...data.lost, ...data.found]) posts[row.id] = row;
   $("c-lost").textContent = `${data.lost.length} оголошень`;
   $("c-found").textContent = `${data.found.length} оголошень`;
@@ -516,6 +524,23 @@ function handle(ev) {
       });
       break;
 
+    case "posted":
+      enqueue(async () => {
+        const p = ev.post;
+        posts[p.id] = p;
+        const target = ev.direction === "lost" ? "d-lost" : "d-found";
+        sticky(`Нове оголошення ${p.id} (${ev.direction === "lost" ? "втрата" : "знахідка"})`, p);
+        consoleLine(`[orchestrator] нове оголошення ${p.id} → user_${ev.direction}.csv`, "orchestrator");
+        await packet(`p-client-${ev.direction}`, { label: `+ ${p.id}`, color: "var(--client)", dur: 1100 });
+        flash(target, "write", 1200);
+        describeTyping(`Збережено як ${p.id}, шукаю пару…`);
+        // the request now names the new post: show it as a chip in the user's bubble
+        const bubbles = document.querySelectorAll(".msg.user");
+        const last = bubbles[bubbles.length - 1];
+        if (last && !last.querySelector(".idchip")) last.innerHTML += ` <span class="idchip ${p.id[0]}" title="${p.text.replace(/"/g, "&quot;")}">${p.id}</span>`;
+      });
+      break;
+
     case "agent_start":
       enqueue(async () => {
         lastAgent = ev.agent;
@@ -661,7 +686,7 @@ function handle(ev) {
         } else {
           await packet("p-client-matcher", { label: STATUS_LABEL[r.status] || r.status, reverse: true, color: "var(--warn)" });
         }
-        setMatchesCount(ev.matches.length);
+        if (ev.data) applyData(ev.data); else setMatchesCount(ev.matches.length);
         setActive("n-client", true);
         setTimeout(() => setActive("n-client", false), 900);
         for (const id of ["n-matcher", "n-verifier"]) setActive(id, false);
@@ -736,8 +761,8 @@ $("reset").addEventListener("click", async () => {
   const response = await fetch("/api/reset", { method: "POST" });
   const data = await response.json();
   if (response.ok) {
-    setMatchesCount(data.matches.length);
-    consoleLine("$ matches.csv очищено");
+    applyData(data);
+    consoleLine("$ matches.csv і нові оголошення з чату очищено");
     flash("d-matches", "read");
   } else consoleLine(data.error, "err");
 });

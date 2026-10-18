@@ -28,7 +28,7 @@ from starlette.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from lostfound.agents import base, orchestrator
-from lostfound.server_v2 import DATA_DIR, MATCH_FIELDS, MATCHES_PATH
+from lostfound.server_v2 import MATCH_FIELDS, MATCHES_PATH, USER_POSTS, _read_posts
 
 HERE = Path(__file__).resolve().parent
 
@@ -109,6 +109,18 @@ async def _run_verifier(handoff, posts=None, model=None):
 
 
 orchestrator.run_matcher = _run_matcher
+
+_original_ingest = orchestrator.ingest
+
+
+def _ingest(request):
+    request, post = _original_ingest(request)
+    if post:
+        emit("posted", post=post, direction="lost" if post["id"].startswith("L") else "found")
+    return request, post
+
+
+orchestrator.ingest = _ingest
 orchestrator.run_verifier = _run_verifier
 
 
@@ -135,8 +147,9 @@ def _rows(path: Path) -> list[dict[str, str]]:
 
 def _data() -> dict:
     return {
-        "lost": _rows(DATA_DIR / "lost.csv"),
-        "found": _rows(DATA_DIR / "found.csv"),
+        "lost": _read_posts("lost.csv"),
+        "found": _read_posts("found.csv"),
+        "user_posts": sum(len(_rows(path)) for path in USER_POSTS.values()),
         "matches": _rows(MATCHES_PATH),
     }
 
@@ -157,6 +170,8 @@ async def reset(request: Request):
         return JSONResponse({"error": "Зачекайте, поки завершиться запит."}, status_code=409)
     with MATCHES_PATH.open("w", encoding="utf-8", newline="") as file:
         csv.DictWriter(file, fieldnames=MATCH_FIELDS).writeheader()
+    for path in USER_POSTS.values():  # posts written through the chat
+        path.unlink(missing_ok=True)
     return JSONResponse(_data())
 
 
@@ -166,7 +181,7 @@ def _worker(text: str, sink: queue.Queue) -> None:
     try:
         emit("request", text=text)
         result = asyncio.run(orchestrator.run_system(text))
-        emit("result", result=result, matches=_rows(MATCHES_PATH))
+        emit("result", result=result, matches=_rows(MATCHES_PATH), data=_data())
     except Exception as e:  # show it in the chat instead of a silent hang
         logging.exception("run failed")
         emit("error", message=f"{type(e).__name__}: {e}")
