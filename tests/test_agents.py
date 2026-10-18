@@ -347,3 +347,24 @@ def test_judge(overrides, problem):
 ])
 def test_same_spot(lost_place, found_place, same):
     assert verifier._same_spot(lost_place, found_place) is same
+
+
+def test_orchestrator_unresolved_reply_names_the_refusal(monkeypatch):
+    calls = iter([
+        {"lost_id": "L15", "found_id": "F30", "reason": "павербанк 140", "direction": "lost"},
+        {"lost_id": "L15", "found_id": None, "reason": "інших немає", "direction": "lost"},
+    ])
+
+    async def fake_matcher(request, rejected=None, model=None):
+        return next(calls)
+
+    async def fake_verifier(handoff, posts=None, model=None):
+        return {"status": "declined", "error_code": "VERIFIER_DECLINED", "problem": "different_item",
+                "message": "Це різні речі: чорний і білий павербанк.", "hint": "", "retryable": True, **handoff}
+
+    monkeypatch.setattr(orchestrator, "run_matcher", fake_matcher)
+    monkeypatch.setattr(orchestrator, "run_verifier", fake_verifier)
+    result = asyncio.run(orchestrator.run_system("Допоможи знайти L15"))
+    assert result["status"] == "unresolved"
+    assert "чорний і білий павербанк" in result["reply"]
+    assert "Інших кандидатів немає" in result["reply"]
