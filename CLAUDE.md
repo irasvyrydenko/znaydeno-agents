@@ -66,7 +66,13 @@ The Matcher passes only its single best candidate, in either direction (the orch
 match = {"lost_id": ..., "found_id": ..., "reason": ...}
 ```
 
-The Verifier receives exactly this and nothing else: no post texts, no dates. This is a deliberate simplification for the current stage.
+The Verifier receives this plus both posts of the pair (id, `event_date`, `status`, text), which the orchestrator reads from the CSV files (`agents/posts.py`). It never sees search results and has no search tools.
+
+**Verifier** works in two steps (`agents/verifier.py`):
+1. Check, LLM without tools: the model fills in a structured check from the two posts (item and place in each, quoted; `same_item`, `place_conflict`, `contradictions`, `shared_specific`). Code decides from it: the pair passes only with the same item, no conflict and at least one specific shared detail; otherwise it is declined with `problem` = `different_item` / `contradiction` / `too_vague`. A claimed place conflict is dropped in code when both places name the same room number or spot.
+2. Record, LLM with `confirm_match`: only after the check passes.
+
+Why two steps: given the tool straight away, qwen3:8b called `confirm_match` for every pair, including ones that `confirm_match` itself accepts but ground truth marks wrong (L07–F15 different place, L19–F04 different room, L01–F01/F02 generic headphones). The Matcher's reason is not judged: an earlier "invented detail" check misfired on noise and refused right pairs; the Verifier compares the posts and writes its own reason instead.
 
 - All data-based checks (`unknown_id`, `already_matched`, `found_before_lost`, `weak_match`) are done inside `confirm_match` from the CSV files, deterministically. The Verifier does not judge them itself.
 - On a refusal, the error `hint` goes back to the Matcher, which takes the next candidate. Cap the loop at 3 attempts.
@@ -74,7 +80,7 @@ The Verifier receives exactly this and nothing else: no post texts, no dates. Th
 - A request may name a post by id ("Допоможи знайти L03", "Чиє це? F07"). The Matcher code attaches that post's text from `lost.csv` or `found.csv` to the prompt, since the tools search by text only.
 - The candidate id (the `found_id` for a lost item, the `lost_id` for a found item) must be one returned by the Matcher's searches in the same run; otherwise it is dropped. A null candidate means no match, and the Verifier is not called. A free-text request has no own post, so nothing is recorded (`candidate_only`).
 - Refusal hints list alternatives from both sides: other found posts for the lost one, and other open lost posts for the found one.
-- If the Verifier turns out to add little, note in the conclusions that it saw only IDs and `reason`. Enriching the handoff with texts and dates (done by the orchestrator from the CSV, not by the Matcher) is the planned next step.
+- A Verifier refusal (`VERIFIER_DECLINED` with its `problem`) goes back to the Matcher like a tool refusal; `too_vague` counts as "needs details", like `WEAK_MATCH`.
 
 ## Tool error contract
 

@@ -48,8 +48,17 @@ def script_llm(monkeypatch, responses):
     return queue
 
 
+def check(**overrides):
+    """A Verifier check that passes, as the model would return it."""
+    base_check = {"lost_item": "навушники", "found_item": "навушники", "same_item": True,
+                  "lost_place": "", "found_place": "", "place_conflict": False, "contradictions": [],
+                  "shared_specific": ["чорні"], "missing_details": ""}
+    return reply(json.dumps({**base_check, **overrides}))
+
+
 def test_verifier_confirms_through_mcp(monkeypatch):
     script_llm(monkeypatch, [
+        check(),
         reply(calls=[tool_call("confirm_match", lost_id="L03", found_id="F07",
                                reason="Чорні навушники JBL, церква, та сама дата.")]),
         reply("Записано."),
@@ -62,6 +71,7 @@ def test_verifier_confirms_through_mcp(monkeypatch):
 
 def test_verifier_cannot_swap_ids(monkeypatch):
     script_llm(monkeypatch, [
+        check(),
         reply(calls=[tool_call("confirm_match", lost_id="L03", found_id="F01",
                                reason="Насправді краще інша пара навушників.")]),
         reply("Готово."),
@@ -74,9 +84,9 @@ def test_verifier_cannot_swap_ids(monkeypatch):
 
 def test_verifier_has_no_search_tools(monkeypatch):
     script_llm(monkeypatch, [
+        check(),
         reply(calls=[tool_call("search_found", query="навушники")]),
         reply(""),
-        reply(json.dumps({"decision": "reject", "message": "Немає деталей."})),
     ])
     handoff = {"lost_id": "L03", "found_id": "F07", "reason": "схоже"}
     verdict = asyncio.run(verifier.run_verifier(handoff))
@@ -86,6 +96,7 @@ def test_verifier_has_no_search_tools(monkeypatch):
 
 def test_verifier_reports_tool_refusal_with_hint(monkeypatch):
     script_llm(monkeypatch, [
+        check(),
         reply(calls=[tool_call("confirm_match", lost_id="L06", found_id="F22",
                                reason="Зелений картхолдер з леокартом у ЦШ.")]),
         reply("Відмова."),
@@ -106,7 +117,7 @@ def test_orchestrator_follows_hint_to_next_candidate(monkeypatch):
         seen_rejected.append(list(rejected or []))
         return {"lost_id": "L06", "found_id": next(proposals), "reason": "зелений картхолдер ЦШ"}
 
-    async def fake_verifier(handoff, model=None):
+    async def fake_verifier(handoff, posts=None, model=None):
         if handoff["found_id"] == "F22":
             return {"status": "rejected", "error_code": "FOUND_BEFORE_LOST", "message": "дата",
                     "hint": "Інші кандидати: F23", "retryable": True, **handoff}
@@ -125,7 +136,7 @@ def test_orchestrator_no_candidate_skips_verifier(monkeypatch):
     async def fake_matcher(request, rejected=None, model=None):
         return {"lost_id": "L17", "found_id": None, "reason": "немає знахідок"}
 
-    async def fail_verifier(handoff, model=None):
+    async def fail_verifier(handoff, posts=None, model=None):
         raise AssertionError("Verifier must not be called without a candidate")
 
     monkeypatch.setattr(orchestrator, "run_matcher", fake_matcher)
@@ -141,7 +152,7 @@ def test_orchestrator_weak_match_asks_for_details_and_stops_at_cap(monkeypatch):
     async def fake_matcher(request, rejected=None, model=None):
         return {"lost_id": "L10", "found_id": f"F{19 + len(rejected or [])}", "reason": "пропуск"}
 
-    async def fake_verifier(handoff, model=None):
+    async def fake_verifier(handoff, posts=None, model=None):
         calls["verifier"] += 1
         return {"status": "rejected", "error_code": "WEAK_MATCH", "message": "мало деталей",
                 "hint": "Запитайте у власника колір.", "retryable": True, **handoff}
@@ -207,7 +218,7 @@ def test_orchestrator_found_direction_retries_on_lost_side(monkeypatch):
         seen_rejected.append(list(rejected or []))
         return {"lost_id": next(proposals), "found_id": "F23", "reason": "картхолдер ЦШ", "direction": "found"}
 
-    async def fake_verifier(handoff, model=None):
+    async def fake_verifier(handoff, posts=None, model=None):
         verifier_inputs.append(handoff)
         if handoff["lost_id"] == "L05":
             return {"status": "rejected", "error_code": "WEAK_MATCH", "message": "інша річ",
@@ -228,7 +239,7 @@ def test_orchestrator_found_free_text_does_not_write(monkeypatch):
     async def fake_matcher(request, rejected=None, model=None):
         return {"lost_id": "L07", "found_id": None, "reason": "читацький у 242", "direction": "found"}
 
-    async def fail_verifier(handoff, model=None):
+    async def fail_verifier(handoff, posts=None, model=None):
         raise AssertionError("nothing to record without a found post")
 
     monkeypatch.setattr(orchestrator, "run_matcher", fake_matcher)
@@ -264,3 +275,75 @@ def test_misspelled_arguments_are_dropped_not_failed(monkeypatch):
     ])
     handoff = asyncio.run(matcher.run_matcher("Допоможи знайти L03"))
     assert handoff["found_id"] == "F07"
+
+
+def test_verifier_sees_both_posts(monkeypatch):
+    seen = []
+
+    def fake_chat(client, model, messages, **kwargs):
+        seen.append(messages[1]["content"])
+        return check(same_item=False) if "format" in kwargs else reply("")
+
+    monkeypatch.setattr(base, "chat", fake_chat)
+    handoff = {"lost_id": "L03", "found_id": "F07", "reason": "Червоні навушники"}
+    verdict = asyncio.run(verifier.run_verifier(handoff))
+    assert "JBL" in seen[0] and "в церкві на кріслі" in seen[0]
+    assert verdict["status"] == "declined" and verdict["problem"] == "different_item"
+    assert rows() == []
+
+
+def test_repeated_call_does_not_hide_the_real_refusal(monkeypatch):
+    weak = tool_call("confirm_match", lost_id="L10", found_id="F19", reason="Пропуск, обидва без підпису.")
+    script_llm(monkeypatch, [check(), reply(calls=[weak]), reply(calls=[weak]), reply("Відмова.")])
+    handoff = {"lost_id": "L10", "found_id": "F19", "reason": "пропуск"}
+    verdict = asyncio.run(verifier.run_verifier(handoff))
+    assert verdict["status"] == "rejected"
+    assert verdict["error_code"] == "WEAK_MATCH"
+    assert "Запитайте у власника" in verdict["hint"]
+
+
+def test_orchestrator_passes_posts_and_treats_vague_as_needs_details(monkeypatch):
+    seen_posts = []
+
+    async def fake_matcher(request, rejected=None, model=None):
+        if rejected:
+            return {"lost_id": "L10", "found_id": None, "reason": "інших немає", "direction": "lost"}
+        return {"lost_id": "L10", "found_id": "F19", "reason": "пропуск", "direction": "lost"}
+
+    async def fake_verifier(handoff, posts=None, model=None):
+        seen_posts.append(posts)
+        return {"status": "declined", "error_code": "VERIFIER_DECLINED", "problem": "too_vague",
+                "message": "Лише «пропуск».", "hint": "Запитайте у власника: колір шнурка.",
+                "retryable": True, **handoff}
+
+    monkeypatch.setattr(orchestrator, "run_matcher", fake_matcher)
+    monkeypatch.setattr(orchestrator, "run_verifier", fake_verifier)
+    result = asyncio.run(orchestrator.run_system("Допоможи знайти L10"))
+    assert seen_posts[0]["lost"]["id"] == "L10" and seen_posts[0]["found"]["id"] == "F19"
+    assert result["status"] == "needs_details"
+    assert "колір шнурка" in result["reply"]
+
+
+@pytest.mark.parametrize("overrides, problem", [
+    ({"same_item": False}, "different_item"),
+    ({"place_conflict": True, "lost_place": "242", "found_place": "Стрийський парк"}, "contradiction"),
+    ({"contradictions": ["lost: чорні / found: білі"]}, "contradiction"),
+    ({"shared_specific": []}, "too_vague"),
+    ({}, None),
+])
+def test_judge(overrides, problem):
+    passing = json.loads(check().message.content)
+    posts = {"lost": {"id": "L03"}, "found": {"id": "F07"}}
+    got, message = verifier.judge({**passing, **overrides}, {"lost_id": "L03", "found_id": "F07"}, posts)
+    assert got == problem
+    assert bool(message) == bool(problem)
+
+
+@pytest.mark.parametrize("lost_place, found_place, same", [
+    ("Свєнціцького, 3 поверх біля 342, або трапезну", "3 поверсі Свєнціцького біля 342", True),
+    ("211 на СВ", "трапезній на Свєнца", False),
+    ("в 242 на Свєнціцького", "в Стрийському парку", False),
+    ("1 поверх СВ", "3 поверх СВ", False),
+])
+def test_same_spot(lost_place, found_place, same):
+    assert verifier._same_spot(lost_place, found_place) is same

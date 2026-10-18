@@ -21,10 +21,16 @@ import sys
 
 from lostfound.agents.base import log
 from lostfound.agents.matcher import run_matcher
+from lostfound.agents.posts import pair_posts
 from lostfound.agents.verifier import run_verifier
 from lostfound.tracing import flush, record, traced
 
 MAX_ATTEMPTS = 3
+
+
+def _needs_details(item: dict) -> bool:
+    """A refusal that more details from the owner would fix."""
+    return item.get("error_code") == "WEAK_MATCH" or item.get("problem") == "too_vague"
 
 
 def _sides(handoff: dict) -> tuple[str | None, str | None]:
@@ -51,7 +57,7 @@ def _reply(status: str, attempts: list[dict], match: dict | None) -> str:
     if status == "already_matched":
         return f"{verdict.get('message', '')} {verdict.get('hint', '')}".strip()
     if status == "needs_details":
-        weak = next(a["verdict"] for a in reversed(attempts) if (a.get("verdict") or {}).get("error_code") == "WEAK_MATCH")
+        weak = next(a["verdict"] for a in reversed(attempts) if _needs_details(a.get("verdict") or {}))
         return f"Не можу підтвердити збіг: {weak['message']} {weak['hint']}".strip()
     if status == "unresolved":
         return (
@@ -85,7 +91,7 @@ async def run_system(request: str, model: str | None = None) -> dict:
         candidate, own = _sides(handoff)
         if not candidate:
             # After a weak match, "nothing else" means the owner has to add details
-            weak = any(r.get("error_code") == "WEAK_MATCH" for r in rejected)
+            weak = any(_needs_details(r) for r in rejected)
             status = "needs_details" if weak else ("unresolved" if rejected else "no_match")
             break
         if not own:
@@ -93,9 +99,9 @@ async def run_system(request: str, model: str | None = None) -> dict:
             status = "candidate_only"
             break
 
-        # The Verifier gets exactly the handoff contract, nothing else
+        # The Verifier gets the handoff contract plus both posts, read here from the CSV files
         pair = {"lost_id": handoff["lost_id"], "found_id": handoff["found_id"], "reason": handoff["reason"]}
-        verdict = await run_verifier(pair, model=model)
+        verdict = await run_verifier(pair, posts=pair_posts(pair["lost_id"], pair["found_id"]), model=model)
         step["verdict"] = verdict
         if verdict["status"] == "confirmed":
             status, match = "confirmed", {"lost_id": handoff["lost_id"], "found_id": handoff["found_id"]}
@@ -106,11 +112,12 @@ async def run_system(request: str, model: str | None = None) -> dict:
         rejected.append({
             "candidate_id": candidate,
             "error_code": verdict["error_code"],
+            "problem": verdict.get("problem"),
             "message": verdict["message"],
             "hint": verdict["hint"],
         })
     else:
-        weak = any(r.get("error_code") == "WEAK_MATCH" for r in rejected)
+        weak = any(_needs_details(r) for r in rejected)
         status = "needs_details" if weak else "unresolved"
 
     result = {
