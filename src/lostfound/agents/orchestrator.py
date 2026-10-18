@@ -60,10 +60,10 @@ def _reply(status: str, attempts: list[dict], match: dict | None) -> str:
         weak = next(a["verdict"] for a in reversed(attempts) if _needs_details(a.get("verdict") or {}))
         return f"Не можу підтвердити збіг: {weak['message']} {weak['hint']}".strip()
     if status == "unresolved":
-        return (
-            f"За {len(attempts)} спроби надійного збігу не знайдено. "
-            f"Остання відмова: {verdict.get('message', '')}"
-        ).strip()
+        # The last attempt may have no verdict: the Matcher found nobody else after a refusal
+        refused = next((a["verdict"] for a in reversed(attempts) if a.get("verdict")), {})
+        after = "Інших кандидатів немає." if not verdict else f"Спроби вичерпано ({len(attempts)})."
+        return f"Надійного збігу не знайдено. Відхилено: {refused.get('message', '')} {after}".strip()
     # no_match
     reason = handoff.get("reason") or (
         "відповідних втрат немає" if handoff.get("direction") == "found" else "відповідних знахідок немає"
