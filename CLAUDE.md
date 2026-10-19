@@ -39,8 +39,6 @@ logs/            tool-call logs (gitignored)
 
 An MCP server `lostfound` (FastMCP, Python, `src/lostfound/server_v2.py`) over `lost.csv` and `found.csv`, with three tools:
 
-`src/lostfound/server.py` is the first version, kept unchanged for comparison; agents and tests use `server_v2.py`. Its search falls back to the first rows when nothing matches, and its `WEAK_MATCH` is a Jaccard threshold of 0.05.
-
 | Tool | Access | Purpose |
 |---|---|---|
 | `search_lost(query, date_from, date_to, limit)` | read | search among lost-item posts |
