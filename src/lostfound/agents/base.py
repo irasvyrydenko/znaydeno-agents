@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -15,7 +16,8 @@ import ollama
 from dotenv import load_dotenv
 from fastmcp import Client
 
-from lostfound.server import mcp as server
+from lostfound.server_v2 import mcp as server
+from lostfound.tracing import record, traced
 
 load_dotenv()
 log = logging.getLogger("lostfound.agents")
@@ -73,6 +75,23 @@ def to_ollama_tool(tool) -> dict:
     }
 
 
+def for_model(result: Any) -> str:
+    """What the model reads back from a tool. Search results become one short line per post
+    (id, date, score, status, text): in raw JSON with every column a small model overlooks
+    rows, e.g. the one exact hit at the top. Everything else stays JSON."""
+    if isinstance(result, list) and all(isinstance(r, dict) and "id" in r and "text" in r for r in result):
+        if not result:
+            return "Нічого не знайдено (0 results)."
+        lines = [f"{len(result)} result(s), best first. score = share of query words found in the post:"]
+        for r in result:
+            status = "" if r.get("status", "open") == "open" else f", status={r['status']}"
+            lines.append(
+                f"- {r['id']} (event_date {r.get('event_date') or 'unknown'}, score {r.get('score')}{status}): {r['text']}"
+            )
+        return "\n".join(lines)
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
 def _summarize(result: Any) -> str:
     if isinstance(result, list):
         found = [row.get("id", "?") for row in result if isinstance(row, dict)]
@@ -105,6 +124,7 @@ class AgentRun:
         return ids
 
 
+@traced("agent_loop")
 async def run_tool_loop(
     agent: str,
     system: str,
@@ -130,6 +150,7 @@ async def run_tool_loop(
         if missing:
             raise RuntimeError(f"MCP server does not expose: {sorted(missing)}")
         ollama_tools = [to_ollama_tool(t) for t in tools]
+        parameters = {t.name: set(t.input_schema.get("properties", {})) for t in tools}
         seen_calls: set[str] = set()
         repeats = 0
 
@@ -144,6 +165,11 @@ async def run_tool_loop(
             for call in calls:
                 name = call.function.name
                 arguments = dict(call.function.arguments or {})
+                unknown = set(arguments) - parameters.get(name, set(arguments))
+                if unknown:
+                    # Small models misspell parameters ("date,To"); drop them instead of failing the call
+                    log.info("[%s] dropped unknown arguments of %s: %s", agent, name, sorted(unknown))
+                    arguments = {k: v for k, v in arguments.items() if k not in unknown}
                 if sanitize_arguments:
                     fixed = sanitize_arguments(name, arguments)
                     if fixed != arguments:
@@ -152,6 +178,7 @@ async def run_tool_loop(
                         arguments = fixed
                 log.info("[%s] -> %s(%s)", agent, name, json.dumps(arguments, ensure_ascii=False))
 
+                started = time.perf_counter()
                 call_key = f"{name}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
                 if call_key in seen_calls:
                     # Small models loop on the same query; answer from history instead of calling again
@@ -181,11 +208,13 @@ async def run_tool_loop(
 
                 seen_calls.add(call_key)
                 log.info("[%s] <- %s", agent, _summarize(result))
+                record("tool_call", agent=agent, tool=name, arguments=arguments, result=result,
+                       ms=round((time.perf_counter() - started) * 1000))
                 run.tool_calls.append(ToolCallRecord(name, arguments, result))
                 messages.append({
                     "role": "tool",
                     "tool_name": name,
-                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                    "content": for_model(result),
                 })
 
             if repeats >= 2:

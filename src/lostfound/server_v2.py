@@ -1,7 +1,8 @@
 """FastMCP server for searching and confirming lost-and-found items.
 
-Reads only data/processed/lost.csv and found.csv; confirm_match is the only writer
-(data/processed/matches.csv). Never reads data/eval/.
+Reads only data/processed/: lost.csv and found.csv, plus user_lost.csv and user_found.csv
+(posts people added through the system; written by the orchestrator, never by the tools).
+confirm_match is the only writer of data/processed/matches.csv. Never reads data/eval/.
 """
 
 from __future__ import annotations
@@ -18,6 +19,9 @@ from fastmcp import FastMCP
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "processed"
 MATCHES_PATH = DATA_DIR / "matches.csv"
+# Posts written by people through the system (free-text requests), kept apart from the dataset
+USER_POSTS = {"lost.csv": DATA_DIR / "user_lost.csv", "found.csv": DATA_DIR / "user_found.csv"}
+POST_FIELDS = ["id", "posted_at", "event_date", "author", "status", "text"]
 MATCH_FIELDS = ["lost_id", "found_id", "reason", "confirmed_at"]
 
 # A post is returned by search only if it covers at least this share of the query words
@@ -154,8 +158,13 @@ def _colors(text: str) -> set[str]:
 
 
 def _read_posts(filename: str) -> list[dict[str, str]]:
-    with (DATA_DIR / filename).open(encoding="utf-8", newline="") as file:
-        return list(csv.DictReader(file))
+    """Dataset posts plus posts that people added through the system."""
+    rows = []
+    for path in (DATA_DIR / filename, USER_POSTS[filename]):
+        if path.exists():
+            with path.open(encoding="utf-8", newline="") as file:
+                rows.extend(csv.DictReader(file))
+    return rows
 
 
 def _read_matches() -> list[dict[str, str]]:
@@ -191,9 +200,16 @@ def _search(
     if not terms:
         return []
 
+    # Same rule as confirm_match: if the query names an item, a post sharing only the place or
+    # colour is not a candidate ("цноту 242 Свєнціцького" must not return a lost library card in 242)
+    names_item = any(not _is_place(t) and not _is_color(t) for t in terms)
+
     scored = []
     for row in rows:
-        coverage = len(_shared_words(terms, row["text"])) / len(terms)
+        shared = _shared_words(terms, row["text"])
+        if names_item and all(_is_place(w) or _is_color(w) for w in shared):
+            continue
+        coverage = len(shared) / len(terms)
         if coverage >= min_coverage:
             scored.append({**row, "score": round(coverage, 2)})
 
@@ -239,16 +255,33 @@ def _error(error_code: str, message: str, retryable: bool, hint: str) -> dict[st
     }
 
 
-def _other_candidates(lost: dict[str, str], exclude: set[str]) -> str:
-    """Real alternatives for a hint: found posts similar to the lost one, not earlier than it."""
-    taken = {row["found_id"] for row in _read_matches()}
-    candidates = _search(
+def _other_candidates(lost: dict[str, str], found: dict[str, str]) -> str:
+    """Real alternatives for a hint, from both sides of the rejected pair:
+    found posts similar to the lost one (not earlier than it), and open lost posts similar
+    to the found one (not later than it). The Matcher uses whichever side it is searching."""
+    matches = _read_matches()
+    taken_found = {row["found_id"] for row in matches}
+    taken_lost = {row["lost_id"] for row in matches}
+    resolved = {row["id"] for row in _read_posts("lost.csv") if row["status"] == "resolved"}
+    found_alternatives = _search(
         "found.csv", lost["text"], lost["event_date"] or None, None, 3,
-        frozenset(exclude | taken), HINT_QUERY_COVERAGE,
+        frozenset({found["id"]} | taken_found), HINT_QUERY_COVERAGE,
     )
-    if not candidates:
+    # Found posts are short, so the normal search bar applies; the low hint bar only matches places
+    lost_alternatives = _search(
+        "lost.csv", found["text"], None, found["event_date"] or None, 3,
+        frozenset({lost["id"]} | taken_lost | resolved), MIN_QUERY_COVERAGE,
+    )
+    if not found_alternatives and not lost_alternatives:
         return "Інших кандидатів не знайдено; попросіть у власника більше деталей."
-    return "Інші кандидати: " + "; ".join(_short(row) for row in candidates)
+    parts = []
+    if found_alternatives:
+        parts.append("Інші кандидати: " + "; ".join(_short(row) for row in found_alternatives))
+    if lost_alternatives:
+        parts.append(
+            f"Інші втрати, схожі на {found['id']}: " + "; ".join(_short(row) for row in lost_alternatives)
+        )
+    return ". ".join(parts)
 
 
 @mcp.tool
@@ -310,7 +343,7 @@ def confirm_match(lost_id: str, found_id: str, reason: str) -> dict[str, Any]:
             "FOUND_BEFORE_LOST",
             f"Знахідка {found_id} ({found_date}) раніше за втрату {lost_id} ({lost_date}).",
             retryable=True,
-            hint=_other_candidates(lost, {found_id}),
+            hint=_other_candidates(lost, found),
         )
 
     lost_colors, found_colors = _colors(lost["text"]), _colors(found["text"])
@@ -320,7 +353,7 @@ def confirm_match(lost_id: str, found_id: str, reason: str) -> dict[str, Any]:
             f"Кольори не збігаються: у {lost_id} {', '.join(sorted(lost_colors))}*, "
             f"у {found_id} {', '.join(sorted(found_colors))}*.",
             retryable=True,
-            hint=_other_candidates(lost, {found_id}),
+            hint=_other_candidates(lost, found),
         )
 
     shared = _shared_words(_tokens(lost["text"]), found["text"])
@@ -337,7 +370,7 @@ def confirm_match(lost_id: str, found_id: str, reason: str) -> dict[str, Any]:
             f"Оголошення {lost_id} і {found_id} майже не мають спільних деталей ({details}).",
             retryable=True,
             hint="Запитайте у власника колір, бренд чи особливі прикмети. "
-            + _other_candidates(lost, {found_id}),
+            + _other_candidates(lost, found),
         )
 
     write_header = not MATCHES_PATH.exists() or MATCHES_PATH.stat().st_size == 0
