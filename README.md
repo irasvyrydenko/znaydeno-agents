@@ -31,6 +31,8 @@ The orchestrator controls the `Matcher -> Verifier` sequence. If the Verifier re
 
 The agents call tools through an MCP client. They do not directly import tool functions for execution.
 
+![Demo UI: the request "Загубила гаманець в к2" becomes post L37, the Matcher proposes F29, and the Verifier records the match](docs/ui-screenshot.png)
+
 ## 3. MCP tools
 
 The MCP server exposes three tools:
